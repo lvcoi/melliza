@@ -1,4 +1,4 @@
-# Chief
+# Chief [WIP]
 
 <p align="center">
   <img src="assets/hero.png" alt="Chief" width="500">
