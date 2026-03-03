@@ -1,12 +1,12 @@
 #!/bin/sh
 # Melliza Install Script
-# https://github.com/minicodemonkey/melliza
+# https://github.com/lvcoi/melliza
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/MiniCodeMonkey/melliza/refs/heads/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/refs/heads/main/install.sh | sh
 #
 # Or with a specific version:
-#   curl -fsSL https://raw.githubusercontent.com/MiniCodeMonkey/melliza/refs/heads/main/install.sh | sh -s -- --version v0.1.0
+#   curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/refs/heads/main/install.sh | sh -s -- --version v0.1.0
 #
 # This script:
 #   - Detects OS (darwin/linux) and architecture (amd64/arm64)
@@ -33,7 +33,7 @@ else
 fi
 
 # Configuration
-GITHUB_REPO="minicodemonkey/melliza"
+GITHUB_REPO="lvcoi/melliza"
 BINARY_NAME="melliza"
 VERSION=""
 
@@ -215,8 +215,8 @@ parse_args() {
 Melliza Install Script
 
 Usage:
-    curl -fsSL https://raw.githubusercontent.com/MiniCodeMonkey/melliza/refs/heads/main/install.sh | sh
-    curl -fsSL https://raw.githubusercontent.com/MiniCodeMonkey/melliza/refs/heads/main/install.sh | sh -s -- --version v0.1.0
+    curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/refs/heads/main/install.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/refs/heads/main/install.sh | sh -s -- --version v0.1.0
 
 Options:
     --version, -v VERSION    Install a specific version (e.g., v0.1.0)

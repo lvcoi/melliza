@@ -1,5 +1,6 @@
 # Binaries
 /melliza
+/bin/
 *.exe
 
 # Log files

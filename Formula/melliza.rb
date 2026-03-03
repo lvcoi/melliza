@@ -4,7 +4,7 @@
 # Installation Options:
 #
 # Option 1: Use the tap (recommended after first release)
-#   brew tap minicodemonkey/melliza
+#   brew tap lvcoi/melliza
 #   brew install melliza
 #
 # Option 2: Install directly from this repo

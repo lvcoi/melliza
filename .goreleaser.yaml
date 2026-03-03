@@ -87,7 +87,7 @@ brews:
       name: homebrew-melliza
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
-    homepage: "https://melliza.dev"
+    homepage: "https://lvcoi.github.io/melliza"
     description: "Autonomous agent loop for working through PRDs with Gemini CLI"
     license: "MIT"
     # Custom install script
