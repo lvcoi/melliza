@@ -82,7 +82,7 @@ Melliza automatically checks for updates on startup and notifies you when a new 
 Download and install with a single command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/minicodemonkey/melliza/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/main/install.sh | bash
 ```
 
 The script automatically detects your platform and downloads the appropriate binary.
@@ -99,13 +99,13 @@ The script automatically detects your platform and downloads the appropriate bin
 
 ```bash
 # Install a specific version
-curl -fsSL https://raw.githubusercontent.com/minicodemonkey/melliza/main/install.sh | bash -s -- --version v0.1.0
+curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/main/install.sh | bash -s -- --version v0.1.0
 
 # Install to a custom directory
-curl -fsSL https://raw.githubusercontent.com/minicodemonkey/melliza/main/install.sh | bash -s -- --dir ~/.local/bin
+curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/main/install.sh | bash -s -- --dir ~/.local/bin
 
 # Both options combined
-curl -fsSL https://raw.githubusercontent.com/minicodemonkey/melliza/main/install.sh | bash -s -- --version v0.1.0 --dir /opt/melliza
+curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/main/install.sh | bash -s -- --version v0.1.0 --dir /opt/melliza
 ```
 
 ::: info Custom Directory

@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export default defineConfig({
-  base: '/',
+  base: '/melliza/',
   title: 'Melliza',
   description: 'Autonomous PRD Agent — Write a PRD, run Melliza, watch your code get built.',
   head: [
@@ -13,11 +13,11 @@ export default defineConfig({
     ['meta', { property: 'og:site_name', content: 'Melliza' }],
     ['meta', { property: 'og:title', content: 'Melliza — Autonomous PRD Agent' }],
     ['meta', { property: 'og:description', content: 'Write a PRD, run Melliza, watch your code get built. An autonomous agent that transforms product requirements into working code.' }],
-    ['meta', { property: 'og:image', content: 'https://melliza.dev/images/og-default.png' }],
+    ['meta', { property: 'og:image', content: 'https://lvcoi.github.io/melliza/images/og-default.png' }],
     ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
     ['meta', { name: 'twitter:title', content: 'Melliza — Autonomous PRD Agent' }],
     ['meta', { name: 'twitter:description', content: 'Write a PRD, run Melliza, watch your code get built. An autonomous agent that transforms product requirements into working code.' }],
-    ['meta', { name: 'twitter:image', content: 'https://melliza.dev/images/og-default.png' }],
+    ['meta', { name: 'twitter:image', content: 'https://lvcoi.github.io/melliza/images/og-default.png' }],
   ],
 
   // Force dark mode only
