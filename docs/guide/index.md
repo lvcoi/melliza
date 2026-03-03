@@ -1,7 +1,3 @@
----
-layout: doc
-description: Get started with Melliza, the autonomous PRD agent. Learn how to install, configure, and run Melliza to build features from product requirements.
----
 
 # Getting Started
 

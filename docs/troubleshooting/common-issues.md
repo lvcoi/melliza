@@ -1,6 +1,3 @@
----
-description: Troubleshoot common Melliza issues including Gemini not found, permission errors, worktree problems, and loop failures.
----
 
 # Common Issues
 

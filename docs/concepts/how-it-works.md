@@ -1,14 +1,11 @@
----
-description: Learn how Melliza works as an autonomous coding agent, transforming your requirements into working code through an automated execution loop.
----
 
 # How Melliza Works
 
 Melliza is an autonomous coding agent that transforms your requirements into working code, without constant back-and-forth prompting.
 
-::: tip Background
+!!! tip Background
 For the motivation behind Melliza and a deeper exploration of autonomous coding agents, read the blog post: [Introducing Melliza: Autonomous PRD Agent](https://minicodemonkey.com/blog/2025/melliza)
-:::
+   
 
 ## The Core Concept
 

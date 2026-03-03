@@ -1,6 +1,3 @@
----
-description: Frequently asked questions about Melliza, the autonomous PRD agent. Answers about usage, requirements, and how it works.
----
 
 # FAQ
 

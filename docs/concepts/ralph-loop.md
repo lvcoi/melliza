@@ -1,14 +1,11 @@
----
-description: Deep dive into the Ralph Loop, Melliza's core execution model that drives Gemini to autonomously complete user stories one by one.
----
 
 # The Ralph Loop
 
 The Ralph Loop is Melliza's core execution model: a continuous cycle that drives Gemini to complete user stories one by one. It's the engine that makes autonomous development possible.
 
-::: tip Background Reading
+!!! tip Background Reading
 For the motivation and philosophy behind this approach, read the blog post [Ship Features in Your Sleep with Ralph Loops](https://larswadefalk.com/ship-features-in-your-sleep-with-ralph-loops/).
-:::
+   
 
 ## The Loop Visualized
 

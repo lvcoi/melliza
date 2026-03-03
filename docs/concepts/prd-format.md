@@ -1,6 +1,3 @@
----
-description: Complete guide to Melliza's PRD format including prd.md and prd.json structure, user story fields, selection logic, and best practices.
----
 
 # PRD Format
 
@@ -63,9 +60,9 @@ Users need to register, log in, reset passwords, and manage sessions.
 
 This file is included in Gemini's context but never parsed programmatically. Gemini reads it to understand what you're building and how.
 
-::: tip
+!!! tip
 The better your `prd.md`, the better Gemini's output. Spend time here — it pays off across every story.
-:::
+   
 
 ## prd.json — The Machine-Readable File
 
@@ -227,9 +224,9 @@ Here's a complete `prd.json` with annotations explaining each part:
 }
 ```
 
-::: info
+!!! info
 JSON doesn't support comments. The annotations above are for illustration only — your actual `prd.json` should be valid JSON without comments.
-:::
+   
 
 ## Best Practices
 
