@@ -366,6 +366,9 @@ func (a *App) SetCompletionCallback(fn func(prdName string)) {
 // SetVerbose enables or disables verbose mode (raw Gemini output in log).
 func (a *App) SetVerbose(v bool) {
 	a.verbose = v
+	if a.logViewer != nil {
+		a.logViewer.SetVerbose(v)
+	}
 }
 
 // DisableRetry disables automatic retry on Gemini crashes.
