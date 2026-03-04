@@ -24,7 +24,7 @@ your-project/
 ```
 
 The root `.melliza/` directory contains:
-- `config.yaml` — Project-level settings (see [Configuration](/reference/configuration))
+- `config.yaml` — Project-level settings (see [Configuration](../reference/configuration.md))
 - `prds/` — One subdirectory per PRD with requirements, state, and logs
 - `worktrees/` — Git worktrees for parallel PRD isolation (created on demand)
 
@@ -77,7 +77,7 @@ Key fields:
 | `userStories[].passes` | boolean | Whether the story is complete |
 | `userStories[].inProgress` | boolean | Whether Melliza is currently working on this story |
 
-Melliza selects the next story by finding the highest-priority story (lowest `priority` number) where `passes` is `false`. See the [PRD Format](/concepts/prd-format) reference for full details.
+Melliza selects the next story by finding the highest-priority story (lowest `priority` number) where `passes` is `false`. See the [PRD Format](prd-format.md) reference for full details.
 
 ### `progress.md`
 
