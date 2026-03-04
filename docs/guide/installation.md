@@ -241,13 +241,9 @@ gemini --version
 
 Expected output:
 
-```
-$ melliza --version
-melliza version vX.Y.Z
-
-$ gemini --version
-Gemini CLI vX.Y.Z
-```
+<div style="max-width: 600px; margin: 1rem 0;">
+  <img src="../public/images/cmd-version.svg" alt="Melliza Version Output" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</div>
 
 !!! warning Troubleshooting
 If `melliza` is not found after installation:
@@ -255,13 +251,13 @@ If `melliza` is not found after installation:
 2. Open a new terminal window/tab to reload your shell
 3. Run `which melliza` to see if it's found and where
 
-See the [Troubleshooting Guide](/troubleshooting/common-issues) for more help.
+See the [Troubleshooting Guide](../troubleshooting/common-issues.md) for more help.
    
 
 ## Next Steps
 
 Now that Melliza is installed:
 
-1. **[Quick Start Guide](/guide/quick-start)** - Get running with your first PRD
-2. **[How Melliza Works](/concepts/how-it-works)** - Understand the autonomous agent concept
-3. **[CLI Reference](/reference/cli)** - Explore all available commands
+1. **[Quick Start Guide](quick-start.md)** - Get running with your first PRD
+2. **[How Melliza Works](../concepts/how-it-works.md)** - Understand the autonomous agent concept
+3. **[CLI Reference](../reference/cli.md)** - Explore all available commands

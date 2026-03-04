@@ -313,6 +313,6 @@ Running `melliza new` scaffolds both files with a template. You can also run `me
 
 ## What's Next
 
-- [PRD Schema Reference](/reference/prd-schema) — Complete TypeScript type definitions and field details
-- [The .melliza Directory](/concepts/melliza-directory) — Understanding the full directory structure
-- [How Melliza Works](/concepts/how-it-works) — How Melliza uses these files during execution
+- [PRD Schema Reference](../reference/prd-schema.md) — Complete TypeScript type definitions and field details
+- [The .melliza Directory](melliza-directory.md) — Understanding the full directory structure
+- [How Melliza Works](how-it-works.md) — How Melliza uses these files during execution

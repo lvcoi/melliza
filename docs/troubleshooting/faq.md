@@ -137,7 +137,7 @@ Melliza instructs Gemini to run quality checks (tests, lint, typecheck) before c
 
 ## Troubleshooting
 
-### See [Common Issues](/troubleshooting/common-issues)
+### See [Common Issues](common-issues.md)
 
 For specific problems and solutions.
 

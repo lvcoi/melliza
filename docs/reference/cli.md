@@ -121,12 +121,11 @@ Scans `.melliza/prds/` and shows each PRD with its completion status.
 ```bash
 # List all PRDs
 melliza list
-
-# Example output:
-#   auth-system    5/8 stories complete
-#   landing-page   12/12 stories complete ✓
-#   api-v2         0/6 stories complete
 ```
+
+<div style="max-width: 600px; margin: 1rem 0;">
+  <img src="../public/images/cmd-list.svg" alt="Melliza List Output" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+</div>
 
 
 ## Keyboard Shortcuts (TUI)

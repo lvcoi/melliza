@@ -4,7 +4,7 @@
 Get Melliza running in under 5 minutes.
 
 <div style="max-width: 800px; margin: 2rem auto; padding: 0 1rem;">
-  <img src="/images/tui-screenshot.png" alt="Melliza TUI" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
+  <img src="../public/images/tui-screenshot.svg" alt="Melliza TUI" style="border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);" />
 </div>
 
 ## Prerequisites
@@ -126,8 +126,8 @@ Once started with `s`, Melliza runs autonomously. You can watch the progress or 
 
 Now that you've run your first Melliza loop, explore these resources:
 
-- [Installation Guide](/guide/installation) - Detailed installation options for all platforms
-- [How Melliza Works](/concepts/how-it-works) - Understand the autonomous loop
-- [The Ralph Loop](/concepts/ralph-loop) - Deep dive into the execution model
-- [PRD Format](/concepts/prd-format) - Write effective PRDs
-- [CLI Reference](/reference/cli) - All available commands and options
+- [Installation Guide](installation.md) - Detailed installation options for all platforms
+- [How Melliza Works](../concepts/how-it-works.md) - Understand the autonomous loop
+- [The Ralph Loop](../concepts/ralph-loop.md) - Deep dive into the execution model
+- [PRD Format](../concepts/prd-format.md) - Write effective PRDs
+- [CLI Reference](../reference/cli.md) - All available commands and options
