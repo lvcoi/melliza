@@ -2,17 +2,14 @@ site_name = "Melliza"
 site_url = "https://melliza.dev"
 site_description = "Autonomous PRD Agent"
 site_author = "Melliza Team"
-
-[theme]
-name = "zensical"
-
-# We point docs_dir to the current docs directory
 docs_dir = "docs"
 site_dir = "site"
-
 extra_css = [
   "stylesheets/custom.css"
 ]
+
+[theme]
+name = "zensical"
 
 [[theme.palette]]
 # Light mode preference
@@ -28,21 +25,29 @@ accent = "amber"
 
 [[nav]]
 Home = "index.md"
+
+[[nav]]
 "Getting Started" = [
   { "Quick Start" = "guide/quick-start.md" },
   { "Installation" = "guide/installation.md" }
 ]
+
+[[nav]]
 Concepts = [
   { "How Melliza Works" = "concepts/how-it-works.md" },
   { "The Ralph Loop" = "concepts/ralph-loop.md" },
   { "PRD Format" = "concepts/prd-format.md" },
   { "The .melliza Directory" = "concepts/melliza-directory.md" }
 ]
+
+[[nav]]
 Reference = [
   { "CLI Commands" = "reference/cli.md" },
   { "Configuration" = "reference/configuration.md" },
   { "PRD Schema" = "reference/prd-schema.md" }
 ]
+
+[[nav]]
 Troubleshooting = [
   { "Common Issues" = "troubleshooting/common-issues.md" },
   { "FAQ" = "troubleshooting/faq.md" }
