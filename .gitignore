@@ -31,3 +31,4 @@ venv/
 *_SPEC.md
 CHIEF_TUI_SPEC.md
 WORKTREES_SPEC.md
+bin/
