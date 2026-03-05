@@ -71,7 +71,7 @@ Melliza follows a simple, repeatable cycle:
 
 ## 📚 Documentation
 
-Full documentation is available at [**melliza.dev**](https://melliza.dev).
+Full documentation is available at [**melliza docs**](https://lvcoi.github.io/melliza).
 
 *   [Installation Guide](https://melliza.dev/guide/installation)
 *   [Quick Start](https://melliza.dev/guide/quick-start)
