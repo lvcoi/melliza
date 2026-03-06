@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/lvcoi/melliza/embed"
 	"github.com/lvcoi/melliza/internal/config"
 	"github.com/lvcoi/melliza/internal/git"
@@ -91,6 +91,13 @@ type cleanResultMsg struct {
 	clearBranch  bool
 }
 
+// deleteResultMsg is sent when a delete (trash) operation completes.
+type deleteResultMsg struct {
+	prdName string
+	success bool
+	message string
+}
+
 // autoActionResultMsg is sent when a post-completion auto-action (push/PR) completes.
 type autoActionResultMsg struct {
 	action  string // "push" or "pr"
@@ -134,6 +141,13 @@ type LaunchEditMsg struct {
 	Name string
 }
 
+// convertDoneMsg is sent when async PRD conversion completes.
+type convertDoneMsg struct {
+	prdName string
+	prdDir  string
+	err     error
+}
+
 // ViewMode represents which view is currently active.
 type ViewMode int
 
@@ -159,8 +173,9 @@ type App struct {
 	state         AppState
 	iteration     int
 	startTime     time.Time
-	selectedIndex      int
+	selectedIndex       int
 	storiesScrollOffset int
+	detailsScrollOffset int
 	width              int
 	height             int
 	err           error
@@ -228,20 +243,7 @@ type App struct {
 
 	// Verbose mode - show raw Gemini output
 	verbose bool
-
-	// Post-exit action - what to do after TUI exits
-	PostExitAction PostExitAction
-	PostExitPRD    string // PRD name for post-exit action
 }
-
-// PostExitAction represents an action to take after the TUI exits.
-type PostExitAction int
-
-const (
-	PostExitNone PostExitAction = iota
-	PostExitInit
-	PostExitEdit
-)
 
 // NewApp creates a new App with the given PRD.
 func NewApp(prdPath string) (*App, error) {
@@ -394,7 +396,6 @@ func (a App) Init() tea.Cmd {
 	}
 
 	cmds := []tea.Cmd{
-		tea.EnterAltScreen,
 		a.listenForPRDChanges(),
 		a.listenForManagerEvents(),
 		a.listenForProgressChanges(),
@@ -404,7 +405,7 @@ func (a App) Init() tea.Cmd {
 	if a.viewMode == ViewPRDCreationChat && a.creationChat != nil {
 		prdDir := filepath.Join(a.baseDir, ".melliza", "prds", a.creationChat.prdName)
 		prompt := embed.GetInitPrompt(prdDir, a.creationChat.context)
-		cmds = append(cmds, a.creationChat.StartSession(prompt))
+		cmds = append(cmds, a.creationChat.StartSession(prompt), tickChatSpinner())
 	}
 
 	return tea.Batch(cmds...)
@@ -431,8 +432,48 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		a.height = msg.Height
 		// Log viewer size is set authoritatively in renderLogView (with correct -4 width).
-		// Only update height here for scroll calculations; width will match on next render.
+		// Panel inner height = total panel height minus border frame (2 lines)
 		a.logViewer.SetSize(a.width-4, a.height-headerHeight-footerHeight-2)
+		return a, nil
+
+	case tea.MouseWheelMsg:
+		if msg.Button == tea.MouseWheelUp {
+			switch a.viewMode {
+			case ViewLog:
+				a.logViewer.ScrollUp()
+			case ViewDiff:
+				a.diffViewer.ScrollUp()
+			case ViewPicker:
+				a.picker.MoveUp()
+				a.picker.Refresh()
+			case ViewSettings:
+				a.settingsOverlay.MoveUp()
+			default:
+				if a.selectedIndex > 0 {
+					a.selectedIndex--
+					if a.selectedIndex < a.storiesScrollOffset {
+						a.storiesScrollOffset = a.selectedIndex
+					}
+				}
+			}
+		} else if msg.Button == tea.MouseWheelDown {
+			switch a.viewMode {
+			case ViewLog:
+				a.logViewer.ScrollDown()
+			case ViewDiff:
+				a.diffViewer.ScrollDown()
+			case ViewPicker:
+				a.picker.MoveDown()
+				a.picker.Refresh()
+			case ViewSettings:
+				a.settingsOverlay.MoveDown()
+			default:
+				if a.selectedIndex < len(a.prd.UserStories)-1 {
+					a.selectedIndex++
+					a.adjustStoriesScroll()
+				}
+			}
+		}
 		return a, nil
 
 	case LoopEventMsg:
@@ -458,6 +499,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cleanResultMsg:
 		return a.handleCleanResult(msg)
+
+	case deleteResultMsg:
+		return a.handleDeleteResult(msg)
 
 	case autoActionResultMsg:
 		return a.handleAutoActionResult(msg)
@@ -495,6 +539,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case chatSpinnerTickMsg:
+		if a.viewMode == ViewPRDCreationChat && a.creationChat != nil && a.creationChat.loading {
+			a.creationChat.advanceAnimation()
+			a.creationChat.renderViewport()
+			return a, tickChatSpinner()
+		}
+		return a, nil
+
 	case settingsGHCheckResultMsg:
 		return a.handleSettingsGHCheck(msg)
 
@@ -528,20 +580,33 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.creationChat = NewPRDCreationChat(a.baseDir, msg.Name, "")
 		a.creationChat.SetSize(a.width, a.height)
 		a.viewMode = ViewPRDCreationChat
-		
+
 		// Create PRD directory if it doesn't exist
 		prdDir := filepath.Join(a.baseDir, ".melliza", "prds", msg.Name)
 		_ = os.MkdirAll(prdDir, 0755)
-		
+
 		prompt := embed.GetInitPrompt(prdDir, "")
-		return a, a.creationChat.StartSession(prompt)
+		return a, tea.Batch(a.creationChat.StartSession(prompt), tickChatSpinner())
+
+	case convertDoneMsg:
+		if msg.err != nil {
+			a.lastActivity = "Conversion failed: " + msg.err.Error()
+			return a, nil
+		}
+		prdPath := filepath.Join(msg.prdDir, "prd.json")
+		a.lastActivity = "PRD converted successfully"
+		return a.switchToPRD(msg.prdName, prdPath)
 
 	case LaunchEditMsg:
-		a.PostExitAction = PostExitEdit
-		a.PostExitPRD = msg.Name
-		return a, tea.Quit
+		prdDir := filepath.Join(a.baseDir, ".melliza", "prds", msg.Name)
+		a.creationChat = NewPRDCreationChat(a.baseDir, msg.Name, "")
+		a.creationChat.SetMode(ChatModeEdit)
+		a.creationChat.SetSize(a.width, a.height)
+		a.viewMode = ViewPRDCreationChat
+		prompt := embed.GetEditPrompt(prdDir)
+		return a, tea.Batch(a.creationChat.StartSession(prompt), tickChatSpinner())
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Handle help overlay first (can be opened/closed from any view)
 		if msg.String() == "?" {
 			if a.viewMode == ViewHelp {
@@ -716,6 +781,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				if a.selectedIndex > 0 {
 					a.selectedIndex--
+					a.detailsScrollOffset = 0
 					if a.selectedIndex < a.storiesScrollOffset {
 						a.storiesScrollOffset = a.selectedIndex
 					}
@@ -729,22 +795,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				if a.selectedIndex < len(a.prd.UserStories)-1 {
 					a.selectedIndex++
+					a.detailsScrollOffset = 0
 					a.adjustStoriesScroll()
 				}
 			}
 
-		// Log/diff scrolling
+		// Scrolling — details panel in dashboard, or log/diff views
 		case "ctrl+d", "pgdown":
 			if a.viewMode == ViewLog {
 				a.logViewer.PageDown()
 			} else if a.viewMode == ViewDiff {
 				a.diffViewer.PageDown()
+			} else if a.viewMode == ViewDashboard {
+				a.detailsScrollOffset += 5
 			}
 		case "ctrl+u", "pgup":
 			if a.viewMode == ViewLog {
 				a.logViewer.PageUp()
 			} else if a.viewMode == ViewDiff {
 				a.diffViewer.PageUp()
+			} else if a.viewMode == ViewDashboard {
+				a.detailsScrollOffset -= 5
+				if a.detailsScrollOffset < 0 {
+					a.detailsScrollOffset = 0
+				}
 			}
 		case "g":
 			if a.viewMode == ViewLog {
@@ -1007,6 +1081,14 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 			a.currentStoryID = event.StoryID
 			a.currentStoryStart = time.Now()
 		}
+	case loop.EventStoryCompleted:
+		if isCurrentPRD {
+			label := "✓ " + event.StoryID + " complete"
+			if event.Text != "" {
+				label = "✓ " + event.StoryID + ": " + event.Text
+			}
+			a.lastActivity = label
+		}
 	case loop.EventComplete:
 		if isCurrentPRD {
 			a.state = StateComplete
@@ -1042,6 +1124,22 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 	case loop.EventWatchdogTimeout:
 		if isCurrentPRD {
 			a.lastActivity = event.Text
+		}
+	case loop.EventStderr:
+		// Show meaningful stderr in activity bar (errors, API issues)
+		if isCurrentPRD {
+			lower := strings.ToLower(event.Text)
+			if strings.Contains(lower, "error") ||
+				strings.Contains(lower, "unavailable") ||
+				strings.Contains(lower, "forbidden") ||
+				strings.Contains(lower, "quota") ||
+				strings.Contains(lower, "timeout") {
+				text := event.Text
+				if len(text) > 100 {
+					text = text[:97] + "..."
+				}
+				a.lastActivity = "⚠ " + text
+			}
 		}
 	}
 
@@ -1113,31 +1211,36 @@ func (a App) handleLoopFinished(prdName string, err error) (tea.Model, tea.Cmd) 
 }
 
 // View renders the TUI.
-func (a App) View() string {
+func (a App) View() tea.View {
+	var content string
 	switch a.viewMode {
 	case ViewLog:
-		return a.renderLogView()
+		content = a.renderLogView()
 	case ViewDiff:
-		return a.renderDiffView()
+		content = a.renderDiffView()
 	case ViewPicker:
-		return a.renderPickerView()
+		content = a.renderPickerView()
 	case ViewHelp:
-		return a.renderHelpView()
+		content = a.renderHelpView()
 	case ViewBranchWarning:
-		return a.renderBranchWarningView()
+		content = a.renderBranchWarningView()
 	case ViewWorktreeSpinner:
-		return a.renderWorktreeSpinnerView()
+		content = a.renderWorktreeSpinnerView()
 	case ViewCompletion:
-		return a.renderCompletionView()
+		content = a.renderCompletionView()
 	case ViewSettings:
-		return a.renderSettingsView()
+		content = a.renderSettingsView()
 	case ViewQuitConfirm:
-		return a.renderQuitConfirmView()
+		content = a.renderQuitConfirmView()
 	case ViewPRDCreationChat:
-		return a.renderCreationChatView()
+		content = a.renderCreationChatView()
 	default:
-		return a.renderDashboard()
+		content = a.renderDashboard()
 	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
 }
 
 // renderCreationChatView renders the PRD creation chat view.
@@ -1146,7 +1249,7 @@ func (a *App) renderCreationChatView() string {
 		return "Initializing chat..."
 	}
 	a.creationChat.SetSize(a.width, a.height)
-	return a.creationChat.View()
+	return a.creationChat.View().Content
 }
 
 // renderBranchWarningView renders the branch warning dialog.
@@ -1277,6 +1380,8 @@ func (a App) handleCreationChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "q", "ctrl+c":
+		return a.tryQuit()
 	case "esc":
 		// Only allow canceling if not in the middle of a request
 		if !a.creationChat.loading {
@@ -1285,25 +1390,30 @@ func (a App) handleCreationChatKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		if a.creationChat.done {
-			// PRD is ready, convert it and switch to dashboard
+			// PRD is ready, run conversion asynchronously
 			prdDir := a.creationChat.prdDir
-			prdPath := filepath.Join(prdDir, "prd.json")
-			
-			// Run conversion
-			if err := prd.Convert(prd.ConvertOptions{PRDDir: prdDir}); err != nil {
-				a.lastActivity = "Conversion failed: " + err.Error()
-				a.viewMode = ViewDashboard
-				return a, nil
+			prdName := a.creationChat.prdName
+			isEdit := a.creationChat.mode == ChatModeEdit
+			a.lastActivity = "Converting PRD..."
+			a.viewMode = ViewDashboard
+			return a, func() tea.Msg {
+				err := prd.Convert(prd.ConvertOptions{
+					PRDDir: prdDir,
+					Quiet:  true,
+					Merge:  isEdit, // Auto-merge for edits to avoid stdin prompt
+				})
+				return convertDoneMsg{prdName: prdName, prdDir: prdDir, err: err}
 			}
-			
-			// Switch to the new PRD
-			return a.switchToPRD(a.creationChat.prdName, prdPath)
 		}
 		// Chat component handles its own Enter key to send messages
 	}
 
 	var cmd tea.Cmd
 	_, cmd = a.creationChat.Update(msg)
+	// Start animation tick if a message was just sent (loading started)
+	if a.creationChat.loading && cmd != nil {
+		return a, tea.Batch(cmd, tickChatSpinner())
+	}
 	return a, cmd
 }
 
@@ -1720,6 +1830,13 @@ func tickWorktreeSpinner() tea.Cmd {
 	})
 }
 
+// tickChatSpinner returns a tea.Cmd that ticks the creation chat waiting animation.
+func tickChatSpinner() tea.Cmd {
+	return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg {
+		return chatSpinnerTickMsg{}
+	})
+}
+
 // tickElapsed returns a tea.Cmd that ticks every second for the elapsed time display.
 func tickElapsed() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg {
@@ -1967,6 +2084,27 @@ func (a App) handlePickerKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Dismiss delete result on any key
+	if a.picker.HasDeleteResult() {
+		a.picker.ClearDeleteResult()
+		a.picker.Refresh()
+		// If the active PRD was deleted, switch to the next available one
+		if a.prdName == "" {
+			entry := a.picker.GetSelectedEntry()
+			if entry != nil && entry.LoadError == nil {
+				return a.switchToPRD(entry.Name, entry.Path)
+			}
+			// No PRDs remain — stay in picker
+			a.viewMode = ViewPicker
+		}
+		return a, nil
+	}
+
+	// Handle delete confirmation dialog
+	if a.picker.HasDeleteConfirmation() {
+		return a.handleDeleteConfirmationKeys(msg)
+	}
+
 	// Dismiss clean result on any key
 	if a.picker.HasCleanResult() {
 		a.picker.ClearCleanResult()
@@ -2079,6 +2217,93 @@ func (a App) handlePickerKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.picker.StartCleanConfirmation()
 		}
 		return a, nil
+
+	case "d":
+		// Delete (trash) a non-running PRD
+		if a.picker.CanDelete() {
+			a.picker.StartDeleteConfirmation()
+		}
+		return a, nil
+	}
+
+	return a, nil
+}
+
+// handleDeleteConfirmationKeys handles keyboard input in the delete confirmation dialog.
+func (a App) handleDeleteConfirmationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.picker.CancelDeleteConfirmation()
+		return a, nil
+	case "up", "k":
+		a.picker.DeleteConfirmMoveUp()
+		return a, nil
+	case "down", "j":
+		a.picker.DeleteConfirmMoveDown()
+		return a, nil
+	case "enter":
+		dc := a.picker.GetDeleteConfirmation()
+		if dc == nil {
+			return a, nil
+		}
+
+		option := a.picker.GetDeleteOption()
+		if option == 1 { // Cancel
+			a.picker.CancelDeleteConfirmation()
+			return a, nil
+		}
+
+		prdName := dc.EntryName
+		baseDir := a.baseDir
+
+		return a, func() tea.Msg {
+			if err := trashPRD(baseDir, prdName); err != nil {
+				return deleteResultMsg{
+					prdName: prdName,
+					success: false,
+					message: fmt.Sprintf("Failed to delete PRD: %s", err.Error()),
+				}
+			}
+			return deleteResultMsg{
+				prdName: prdName,
+				success: true,
+				message: fmt.Sprintf("Moved %s to .melliza/.trash/", prdName),
+			}
+		}
+	}
+
+	return a, nil
+}
+
+// handleDeleteResult handles the result of an async delete (trash) operation.
+func (a App) handleDeleteResult(msg deleteResultMsg) (tea.Model, tea.Cmd) {
+	a.picker.CancelDeleteConfirmation()
+	a.picker.SetDeleteResult(&DeleteResult{
+		Success: msg.success,
+		Message: msg.message,
+	})
+
+	if msg.success {
+		// Unregister from manager to stop loop + remove tracking
+		if a.manager != nil {
+			_ = a.manager.Unregister(msg.prdName)
+		}
+
+		// If the deleted PRD is the active one, clean up watcher and defer
+		// the PRD switch until the user dismisses the result dialog.
+		if a.prdName == msg.prdName {
+			a.stopWatcher()
+			a.prd = nil
+			a.prdPath = ""
+			a.prdName = ""
+			a.state = StateReady
+		}
+
+		a.picker.Refresh()
+		if a.tabBar != nil {
+			a.tabBar.Refresh()
+		}
+		a.lastActivity = fmt.Sprintf("Deleted PRD %s", msg.prdName)
 	}
 
 	return a, nil
