@@ -67,8 +67,8 @@ func TestAddEvent_FiltersUnwantedEvents(t *testing.T) {
 	lv := NewLogViewer()
 	lv.SetSize(100, 30)
 
-	lv.AddEvent(loop.Event{Type: loop.EventIterationStart})
 	lv.AddEvent(loop.Event{Type: loop.EventUnknown})
+	lv.AddEvent(loop.Event{Type: loop.EventStdout, Text: "raw output"})
 
 	if len(lv.entries) != 0 {
 		t.Errorf("Expected 0 entries for filtered events, got %d", len(lv.entries))

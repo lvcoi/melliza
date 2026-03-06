@@ -140,6 +140,9 @@ func (l *Loop) Run(ctx context.Context) error {
 	defer l.logFile.Close()
 	defer close(l.events)
 
+	// Track which stories have passed so we can detect completions per iteration
+	passingBefore := make(map[string]bool)
+
 	for {
 		l.mu.Lock()
 		if l.stopped {
@@ -161,6 +164,15 @@ func (l *Loop) Run(ctx context.Context) error {
 				Iteration: currentIter - 1,
 			}
 			return nil
+		}
+
+		// Snapshot passing stories before this iteration
+		if p, err := prd.LoadPRD(l.prdPath); err == nil {
+			for _, s := range p.UserStories {
+				if s.Passes {
+					passingBefore[s.ID] = true
+				}
+			}
 		}
 
 		// Rebuild prompt if builder is set (inlines the current story each iteration)
@@ -200,7 +212,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		default:
 		}
 
-		// Check prd.json for completion
+		// Check prd.json for completion and detect newly passing stories
 		p, err := prd.LoadPRD(l.prdPath)
 		if err != nil {
 			l.events <- Event{
@@ -208,6 +220,18 @@ func (l *Loop) Run(ctx context.Context) error {
 				Err:  fmt.Errorf("failed to load PRD: %w", err),
 			}
 			return err
+		}
+
+		for _, s := range p.UserStories {
+			if s.Passes && !passingBefore[s.ID] {
+				passingBefore[s.ID] = true
+				l.events <- Event{
+					Type:      EventStoryCompleted,
+					Iteration: currentIter,
+					StoryID:   s.ID,
+					Text:      s.Title,
+				}
+			}
 		}
 
 		if p.AllComplete() {

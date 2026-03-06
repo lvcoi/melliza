@@ -1081,6 +1081,14 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 			a.currentStoryID = event.StoryID
 			a.currentStoryStart = time.Now()
 		}
+	case loop.EventStoryCompleted:
+		if isCurrentPRD {
+			label := "✓ " + event.StoryID + " complete"
+			if event.Text != "" {
+				label = "✓ " + event.StoryID + ": " + event.Text
+			}
+			a.lastActivity = label
+		}
 	case loop.EventComplete:
 		if isCurrentPRD {
 			a.state = StateComplete

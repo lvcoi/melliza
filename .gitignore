@@ -1,7 +1,6 @@
 # Binaries
-/melliza
+bin/melliza
 *.exe
-.env
 # Log files
 *.log
 
@@ -19,7 +18,7 @@ gha-creds-*.json
 .env
 .env.*
 *.env
-
+.github/
 # Generated Documents and IDE
 .melliza/
 *.code-workspace
@@ -31,4 +30,15 @@ venv/
 *_SPEC.md
 CHIEF_TUI_SPEC.md
 WORKTREES_SPEC.md
+<<<<<<< copilot/sub-pr-8
 bin/
+=======
+CLAUDE.md
+GEMINI.md
+.melliza
+.gemini
+.claude
+
+# Anythiny north of melliza
+
+>>>>>>> codex/enforce-melliza-cli-invocation-rules-xusq8v
