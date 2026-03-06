@@ -1,5 +1,6 @@
 # Binaries
 /melliza
+/bin/
 *.exe
 .env
 # Log files
