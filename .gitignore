@@ -20,7 +20,6 @@ gha-creds-*.json
 .env
 .env.*
 *.env
-.github/
 
 # Generated Documents and IDE
 .melliza/
