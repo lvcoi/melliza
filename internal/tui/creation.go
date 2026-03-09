@@ -286,10 +286,12 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 
 		waitErr := cmd.Wait()
 
-		// If we captured actual assistant output, return it even if Gemini exited
-		// non-zero. Gemini often exits with code 1 due to stdin closing, extension
-		// errors, or API timeouts — but may have still produced useful output and
-		// written files.
+		// If we captured assistant output, return it even if Gemini exited non-zero.
+		// Gemini often exits with code 1 due to stdin closing, extension errors,
+		// or API timeouts — but may have still produced useful output and written files.
+		// NOTE: a non-empty capturedSessionID alone (init-only output) does NOT count as
+		// success; if Gemini emitted only an init event and then exited non-zero we must
+		// surface the error instead of returning a silent empty message.
 		if lastAssistantMsg != "" {
 			return ChatEventMsg{
 				Type:      "message",
