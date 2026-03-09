@@ -12,19 +12,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/lvcoi/melliza/embed"
+	"github.com/lvcoi/melliza/internal/gemini"
 	"github.com/lvcoi/melliza/internal/prd"
 )
 
 // RetryConfig configures automatic retry behavior on Gemini crashes.
 type RetryConfig struct {
-	MaxRetries  int           // Maximum number of retry attempts (default: 3)
+	MaxRetries  int             // Maximum number of retry attempts (default: 3)
 	RetryDelays []time.Duration // Delays between retries (default: 0s, 5s, 15s)
-	Enabled     bool          // Whether retry is enabled (default: true)
+	Enabled     bool            // Whether retry is enabled (default: true)
 }
 
 // DefaultWatchdogTimeout is the default duration of silence before the watchdog kills a hung process.
@@ -41,21 +43,21 @@ func DefaultRetryConfig() RetryConfig {
 
 // Loop manages the core agent loop that invokes Gemini repeatedly until all stories are complete.
 type Loop struct {
-	prdPath      string
-	workDir      string
-	prompt       string
-	buildPrompt  func() (string, error) // optional: rebuild prompt each iteration
-	maxIter      int
-	iteration    int
-	events       chan Event
-	geminiCmd    *exec.Cmd
-	logFile      *os.File
-	mu               sync.Mutex
-	stopped          bool
-	paused           bool
-	retryConfig      RetryConfig
-	lastOutputTime   time.Time
-	watchdogTimeout  time.Duration
+	prdPath         string
+	workDir         string
+	prompt          string
+	buildPrompt     func() (string, error) // optional: rebuild prompt each iteration
+	maxIter         int
+	iteration       int
+	events          chan Event
+	geminiCmd       *exec.Cmd
+	logFile         *os.File
+	mu              sync.Mutex
+	stopped         bool
+	paused          bool
+	retryConfig     RetryConfig
+	lastOutputTime  time.Time
+	watchdogTimeout time.Duration
 }
 
 // NewLoop creates a new Loop instance.
@@ -138,6 +140,9 @@ func (l *Loop) Run(ctx context.Context) error {
 	defer l.logFile.Close()
 	defer close(l.events)
 
+	// Track which stories have passed so we can detect completions per iteration
+	passingBefore := make(map[string]bool)
+
 	for {
 		l.mu.Lock()
 		if l.stopped {
@@ -159,6 +164,15 @@ func (l *Loop) Run(ctx context.Context) error {
 				Iteration: currentIter - 1,
 			}
 			return nil
+		}
+
+		// Snapshot passing stories before this iteration
+		if p, err := prd.LoadPRD(l.prdPath); err == nil {
+			for _, s := range p.UserStories {
+				if s.Passes {
+					passingBefore[s.ID] = true
+				}
+			}
 		}
 
 		// Rebuild prompt if builder is set (inlines the current story each iteration)
@@ -198,7 +212,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		default:
 		}
 
-		// Check prd.json for completion
+		// Check prd.json for completion and detect newly passing stories
 		p, err := prd.LoadPRD(l.prdPath)
 		if err != nil {
 			l.events <- Event{
@@ -206,6 +220,18 @@ func (l *Loop) Run(ctx context.Context) error {
 				Err:  fmt.Errorf("failed to load PRD: %w", err),
 			}
 			return err
+		}
+
+		for _, s := range p.UserStories {
+			if s.Passes && !passingBefore[s.ID] {
+				passingBefore[s.ID] = true
+				l.events <- Event{
+					Type:      EventStoryCompleted,
+					Iteration: currentIter,
+					StoryID:   s.ID,
+					Text:      s.Title,
+				}
+			}
 		}
 
 		if p.AllComplete() {
@@ -304,90 +330,140 @@ func (l *Loop) runIterationWithRetry(ctx context.Context) error {
 
 // runIteration spawns Gemini and processes its output.
 func (l *Loop) runIteration(ctx context.Context) error {
-	// Build Gemini command with required flags
+	// Build Gemini command with stream-json for real-time event parsing
 	l.mu.Lock()
-	l.geminiCmd = exec.CommandContext(ctx, "gemini",
-		"-y",
-		"-p", l.prompt,
-		"--output-format", "stream-json",
-	)
-	l.geminiCmd.Stdin = nil // Ensure no stdin attachment
-	// Set working directory: use workDir if configured, otherwise default to PRD directory
+	l.geminiCmd = exec.CommandContext(ctx, "gemini", gemini.BuildStreamArgs(l.prompt, "", true)...)
 	l.geminiCmd.Dir = l.effectiveWorkDir()
-	// Initialize watchdog state
 	l.lastOutputTime = time.Now()
-	watchdogTimeout := l.watchdogTimeout
 	l.mu.Unlock()
 
-	// Create pipes for stdout and stderr
 	stdout, err := l.geminiCmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
-
 	stderr, err := l.geminiCmd.StderrPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
-	// Start the command
 	if err := l.geminiCmd.Start(); err != nil {
 		return fmt.Errorf("failed to start Gemini: %w", err)
 	}
 
-	// Start watchdog goroutine to detect hung processes
-	watchdogDone := make(chan struct{})
+	// Start inactivity-based watchdog (kills process if no output for watchdogTimeout)
 	var watchdogFired atomic.Bool
-	if watchdogTimeout > 0 {
-		go l.runWatchdog(watchdogTimeout, watchdogDone, &watchdogFired)
+	watchdogDone := make(chan struct{})
+	if l.watchdogTimeout > 0 {
+		go l.runWatchdog(l.watchdogTimeout, watchdogDone, &watchdogFired)
 	}
 
-	// Process stdout in a separate goroutine
-	var wg sync.WaitGroup
-	wg.Add(2)
-
+	// Drain stderr in background, log it, and capture last meaningful lines
+	var stderrLines []string
+	var stderrMu sync.Mutex
+	stderrDone := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		l.processOutput(stdout)
-	}()
-
-	// Log stderr to the log file
-	go func() {
-		defer wg.Done()
-		l.logStream(stderr, "[stderr] ")
-	}()
-
-	// Wait for output processing to complete
-	wg.Wait()
-
-	// Stop watchdog
-	close(watchdogDone)
-
-	// Wait for the command to finish
-	if err := l.geminiCmd.Wait(); err != nil {
-		// If the context was cancelled, don't treat it as an error
-		if ctx.Err() != nil {
-			return ctx.Err()
+		defer close(stderrDone)
+		scanner := bufio.NewScanner(stderr)
+		scanner.Buffer(make([]byte, 256*1024), 256*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			l.logLine("[stderr] " + line)
+			// Emit stderr as events so TUI can show them
+			l.mu.Lock()
+			iter := l.iteration
+			l.mu.Unlock()
+			l.events <- Event{Type: EventStderr, Iteration: iter, Text: line}
+			// Keep last 10 lines for error context
+			stderrMu.Lock()
+			stderrLines = append(stderrLines, line)
+			if len(stderrLines) > 10 {
+				stderrLines = stderrLines[len(stderrLines)-10:]
+			}
+			stderrMu.Unlock()
 		}
-		// Check if we were stopped intentionally
+	}()
+
+	// Parse stdout stream-json lines in real-time
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Reset inactivity watchdog on every line of output
 		l.mu.Lock()
-		stopped := l.stopped
+		l.lastOutputTime = time.Now()
 		l.mu.Unlock()
-		if stopped {
-			return nil
+
+		l.logLine(line)
+
+		event := ParseLine(line)
+		if event != nil {
+			l.mu.Lock()
+			event.Iteration = l.iteration
+			l.mu.Unlock()
+			l.events <- *event
 		}
-		// Check if the watchdog killed the process
-		if watchdogFired.Load() {
-			return fmt.Errorf("watchdog timeout: no output for %s", watchdogTimeout)
-		}
-		return fmt.Errorf("Gemini exited with error: %w", err)
 	}
+
+	waitErr := l.geminiCmd.Wait()
+	close(watchdogDone) // Stop watchdog
+	<-stderrDone        // Ensure all stderr is captured before using it
 
 	l.mu.Lock()
 	l.geminiCmd = nil
+	stopped := l.stopped
 	l.mu.Unlock()
 
+	if waitErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if watchdogFired.Load() {
+			return fmt.Errorf("watchdog timeout: no output for %s", l.watchdogTimeout)
+		}
+		if stopped {
+			return nil
+		}
+		// Build error with stderr context
+		stderrMu.Lock()
+		stderrContext := filterStderrForError(stderrLines)
+		stderrMu.Unlock()
+		if stderrContext != "" {
+			return fmt.Errorf("Gemini failed: %s", stderrContext)
+		}
+		return fmt.Errorf("Gemini exited with error: %w", waitErr)
+	}
+
 	return nil
+}
+
+// filterStderrForError extracts the most useful error info from stderr lines.
+func filterStderrForError(lines []string) string {
+	// Look for API errors, stack traces, or meaningful messages
+	// Skip noise like "YOLO mode" and "Server ... supports"
+	var useful []string
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "error") ||
+			strings.Contains(lower, "apikey") ||
+			strings.Contains(lower, "unavailable") ||
+			strings.Contains(lower, "forbidden") ||
+			strings.Contains(lower, "unauthorized") ||
+			strings.Contains(lower, "quota") ||
+			strings.Contains(lower, "rate limit") ||
+			strings.Contains(lower, "timeout") ||
+			strings.Contains(lower, "status:") {
+			useful = append(useful, line)
+		}
+	}
+	if len(useful) > 0 {
+		return strings.Join(useful, "\n")
+	}
+	// If no specific error found, return last few lines
+	if len(lines) > 3 {
+		lines = lines[len(lines)-3:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // runWatchdog monitors lastOutputTime and kills the process if no output is received

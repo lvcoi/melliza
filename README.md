@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/lvcoi/melliza/blob/main/LICENSE"><img src="https://img.shields.io/github/license/lvcoi/melliza?style=flat-square" alt="License" /></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?style=flat-square&logo=go" alt="Go Version" /></a>
-  <a href="https://melliza.dev"><img src="https://img.shields.io/badge/docs-melliza.dev-blueviolet?style=flat-square" alt="Documentation" /></a>
+  <a href="https://lvcoi.github.io/melliza"><img src="https://img.shields.io/badge/docs-lvcoi.github.io%2Fmelliza-blueviolet?style=flat-square" alt="Documentation" /></a>
 </p>
 
 ---
@@ -32,7 +32,8 @@ Built on the "Ralph Wiggum loop" pattern, Melliza breaks down complex project re
 *   📈 **Persistent Progress**: Progress is tracked in `prd.json` and `progress.md`, ensuring work can be resumed across sessions.
 *   🖥️ **TUI Dashboard**: A real-time terminal user interface to monitor Gemini's progress, logs, and diffs.
 *   🌿 **Smart Worktrees**: Automatically creates git branches or worktrees for each PRD to keep your main workspace clean.
-*   ✅ **Auto-Commit & Test**: Gemini implements the story, runs your project's tests, and commits changes automatically.
+*   ✅ **Test-First + Auto-Commit**: Gemini follows test-first TDD (red → green → refactor), runs your project's checks, and commits changes automatically.
+*   🖼️ **Visual Verification**: For UI changes, Melliza requires screenshot-based confirmation (or an explicit environment limitation note).
 
 ## 🚀 Quick Start
 
@@ -70,13 +71,14 @@ Melliza follows a simple, repeatable cycle:
 4.  **Finalize**: Once Gemini completes the story, Melliza moves to the next one.
 
 ## 📚 Documentation
+Full documentation is available at [**lvcoi.github.io/melliza**](https://lvcoi.github.io/melliza).
 
-Full documentation is available at [**melliza docs**](https://lvcoi.github.io/melliza).
+### 📖 Key Documentation
 
-*   [Installation Guide](https://melliza.dev/guide/installation)
-*   [Quick Start](https://melliza.dev/guide/quick-start)
-*   [How it Works](https://melliza.dev/concepts/how-it-works)
-*   [PRD Format](https://melliza.dev/concepts/prd-format)
+*   [Installation Guide](https://lvcoi.github.io/melliza/guide/installation)
+*   [Quick Start](https://lvcoi.github.io/melliza/guide/quick-start)
+*   [How it Works](https://lvcoi.github.io/melliza/concepts/how-it-works)
+*   [PRD Format](https://lvcoi.github.io/melliza/concepts/prd-format)
 
 ## 🛠️ Development
 

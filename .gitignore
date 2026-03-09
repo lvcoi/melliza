@@ -1,7 +1,8 @@
 # Binaries
-/melliza
+bin/melliza
+bin/
 *.exe
-.env
+
 # Log files
 *.log
 
@@ -19,6 +20,7 @@ gha-creds-*.json
 .env
 .env.*
 *.env
+.github/
 
 # Generated Documents and IDE
 .melliza/
@@ -31,3 +33,10 @@ venv/
 *_SPEC.md
 CHIEF_TUI_SPEC.md
 WORKTREES_SPEC.md
+
+# Agent Context Files
+CLAUDE.md
+GEMINI.md
+.melliza
+.gemini
+.claude

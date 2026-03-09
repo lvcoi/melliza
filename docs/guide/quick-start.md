@@ -29,7 +29,7 @@ brew install lvcoi/melliza/melliza
 ```
 
 ```bash [Install Script]
-curl -fsSL https://raw.githubusercontent.com/minicodemonkey/melliza/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/main/install.sh | bash
 ```
 
 ```bash [From Source]

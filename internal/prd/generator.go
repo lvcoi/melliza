@@ -12,9 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/term"
 	"github.com/lvcoi/melliza/embed"
+	"github.com/lvcoi/melliza/internal/gemini"
 )
 
 // Colors duplicated from tui/styles.go to avoid import cycle (tui → git → prd).
@@ -58,6 +59,7 @@ type ConvertOptions struct {
 	PRDDir string // Directory containing prd.md
 	Merge  bool   // Auto-merge progress on conversion conflicts
 	Force  bool   // Auto-overwrite on conversion conflicts
+	Quiet  bool   // Suppress terminal UI (progress panels, success message)
 }
 
 // ProgressConflictChoice represents the user's choice when a progress conflict is detected.
@@ -111,7 +113,7 @@ func Convert(opts ConvertOptions) error {
 	}
 
 	// Run Gemini to convert prd.md → JSON string
-	rawJSON, err := runGeminiConversion(absPRDDir, idPrefix)
+	rawJSON, err := runGeminiConversion(absPRDDir, idPrefix, opts.Quiet)
 	if err != nil {
 		return err
 	}
@@ -123,8 +125,10 @@ func Convert(opts ConvertOptions) error {
 	newPRD, err := parseAndValidatePRD(cleanedJSON)
 	if err != nil {
 		// Retry once: ask Gemini to fix the invalid JSON
-		fmt.Println("Conversion produced invalid JSON, retrying...")
-		fmt.Printf("Raw output:\n---\n%s\n---\n", cleanedJSON)
+		if !opts.Quiet {
+			fmt.Println("Conversion produced invalid JSON, retrying...")
+			fmt.Printf("Raw output:\n---\n%s\n---\n", cleanedJSON)
+		}
 		fixedJSON, retryErr := runGeminiJSONFix(cleanedJSON, err)
 		if retryErr != nil {
 			return fmt.Errorf("conversion retry failed: %w", retryErr)
@@ -141,7 +145,7 @@ func Convert(opts ConvertOptions) error {
 	if mdContent, readErr := os.ReadFile(prdMdPath); readErr == nil {
 		mdStoryCount := CountMarkdownStories(string(mdContent))
 		jsonStoryCount := len(newPRD.UserStories)
-		if mdStoryCount > 0 && jsonStoryCount < int(float64(mdStoryCount)*0.8) {
+		if mdStoryCount > 0 && jsonStoryCount < int(float64(mdStoryCount)*0.8) && !opts.Quiet {
 			fmt.Printf("⚠️  Warning: possible truncation — JSON has %d stories but markdown has ~%d story headings\n", jsonStoryCount, mdStoryCount)
 		}
 	}
@@ -191,20 +195,25 @@ func Convert(opts ConvertOptions) error {
 		return fmt.Errorf("failed to write prd.json: %w", err)
 	}
 
-	fmt.Println(lipgloss.NewStyle().Foreground(cSuccess).Render("✓ PRD converted successfully"))
+	if !opts.Quiet {
+		fmt.Println(lipgloss.NewStyle().Foreground(cSuccess).Render("✓ PRD converted successfully"))
+	}
 	return nil
 }
 
 // runGeminiConversion sends the PRD file path to Gemini and returns the JSON output.
 // Gemini reads prd.md itself using file-reading tools, avoiding token limits for large PRDs.
 // The idPrefix determines the story ID convention (e.g., "US" → US-001, "MFR" → MFR-001).
-func runGeminiConversion(absPRDDir, idPrefix string) (string, error) {
+func runGeminiConversion(absPRDDir, idPrefix string, quiet bool) (string, error) {
+	if err := gemini.EnsureAuth(); err != nil {
+		return "", err
+	}
+
 	prdMdPath := filepath.Join(absPRDDir, "prd.md")
 	prompt := embed.GetConvertPrompt(prdMdPath, idPrefix)
 
-	cmd := exec.Command("gemini", "-p", "")
+	cmd := exec.Command("gemini", gemini.BuildHeadlessArgs(prompt, "", true)...)
 	cmd.Dir = absPRDDir
-	cmd.Stdin = strings.NewReader(prompt)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -214,15 +223,26 @@ func runGeminiConversion(absPRDDir, idPrefix string) (string, error) {
 		return "", fmt.Errorf("failed to start Gemini: %w", err)
 	}
 
-	if err := waitWithPanel(cmd, "Converting PRD", "Analyzing PRD...", &stderr); err != nil {
+	if quiet {
+		if err := cmd.Wait(); err != nil {
+			return "", fmt.Errorf("Gemini failed: %s", stderr.String())
+		}
+	} else if err := waitWithPanel(cmd, "Converting PRD", "Analyzing PRD...", &stderr); err != nil {
+		return "", err
+	}
+	if _, err := gemini.ParseSingleJSONObject(stdout.Bytes()); err != nil {
 		return "", err
 	}
 
-	return stdout.String(), nil
+	return mustExtractResponse(stdout.String()), nil
 }
 
 // runGeminiJSONFix asks Gemini to fix invalid JSON inline and returns the corrected output.
 func runGeminiJSONFix(badJSON string, validationErr error) (string, error) {
+	if err := gemini.EnsureAuth(); err != nil {
+		return "", err
+	}
+
 	fixPrompt := fmt.Sprintf(
 		"The following JSON is invalid. The error is: %s\n\n"+
 			"Fix the JSON (pay special attention to escaping double quotes inside string values with backslashes) "+
@@ -230,8 +250,7 @@ func runGeminiJSONFix(badJSON string, validationErr error) (string, error) {
 		validationErr.Error(), badJSON,
 	)
 
-	cmd := exec.Command("gemini", "-p", fixPrompt)
-	cmd.Stdin = nil // Ensure no stdin attachment
+	cmd := exec.Command("gemini", gemini.BuildHeadlessArgs(fixPrompt, "", false)...)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -244,8 +263,19 @@ func runGeminiJSONFix(badJSON string, validationErr error) (string, error) {
 	if err := waitWithSpinner(cmd, "Fixing JSON", "Fixing prd.json...", &stderr); err != nil {
 		return "", err
 	}
+	if _, err := gemini.ParseSingleJSONObject(stdout.Bytes()); err != nil {
+		return "", err
+	}
 
-	return stdout.String(), nil
+	return mustExtractResponse(stdout.String()), nil
+}
+
+func mustExtractResponse(raw string) string {
+	var out struct {
+		Response string `json:"response"`
+	}
+	_ = json.Unmarshal([]byte(strings.TrimSpace(raw)), &out)
+	return out.Response
 }
 
 // parseAndValidatePRD unmarshals a JSON string and validates it as a PRD.

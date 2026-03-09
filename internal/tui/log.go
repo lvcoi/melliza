@@ -10,13 +10,14 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/lvcoi/melliza/internal/loop"
 )
 
 // LogEntry represents a single entry in the log viewer.
 type LogEntry struct {
 	Type      loop.EventType
+	Iteration int
 	Text      string
 	Tool      string
 	ToolInput map[string]interface{}
@@ -58,6 +59,7 @@ func (l *LogViewer) SetVerbose(v bool) {
 func (l *LogViewer) AddEvent(event loop.Event) {
 	entry := LogEntry{
 		Type:      event.Type,
+		Iteration: event.Iteration,
 		Text:      event.Text,
 		Tool:      event.Tool,
 		ToolInput: event.ToolInput,
@@ -82,17 +84,23 @@ func (l *LogViewer) AddEvent(event loop.Event) {
 
 	// Filter out events we don't want to display
 	switch event.Type {
-	case loop.EventAssistantText, loop.EventToolStart, loop.EventToolResult,
-		loop.EventStoryStarted, loop.EventComplete, loop.EventError, loop.EventRetrying,
+	case loop.EventIterationStart, loop.EventAssistantText,
+		loop.EventToolStart, loop.EventToolResult,
+		loop.EventStoryStarted, loop.EventStoryCompleted,
+		loop.EventComplete, loop.EventError, loop.EventRetrying,
 		loop.EventWatchdogTimeout:
 		// Always show these semantic events
-	case loop.EventStdout, loop.EventStderr:
-		// Only show raw output in verbose mode
+	case loop.EventStderr:
+		// Show error-bearing stderr lines even in non-verbose mode
+		if !l.verbose && !isErrorLine(event.Text) {
+			return
+		}
+	case loop.EventStdout:
+		// Only show raw stdout in verbose mode
 		if !l.verbose {
 			return
 		}
 	default:
-		// Skip iteration start, unknown events, etc.
 		return
 	}
 
@@ -361,15 +369,33 @@ func (l *LogViewer) Render() string {
 	return content
 }
 
+// isErrorLine returns true if a stderr line contains error-relevant content.
+func isErrorLine(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "error") ||
+		strings.Contains(lower, "unavailable") ||
+		strings.Contains(lower, "forbidden") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "quota") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "apikey") ||
+		strings.Contains(lower, "status:")
+}
+
 // renderEntry renders a single log entry as lines.
 func (l *LogViewer) renderEntry(entry LogEntry) []string {
 	switch entry.Type {
+	case loop.EventIterationStart:
+		return l.renderIterationStart(entry)
 	case loop.EventToolStart:
 		return l.renderToolCard(entry)
 	case loop.EventToolResult:
 		return l.renderToolResult(entry)
 	case loop.EventStoryStarted:
 		return l.renderStoryStarted(entry)
+	case loop.EventStoryCompleted:
+		return l.renderStoryCompleted(entry)
 	case loop.EventComplete:
 		return l.renderComplete(entry)
 	case loop.EventError:
@@ -387,19 +413,39 @@ func (l *LogViewer) renderEntry(entry LogEntry) []string {
 	}
 }
 
+// isQuestionLine returns true if the line looks like a question (ends with '?').
+func isQuestionLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasSuffix(trimmed, "?") && len(trimmed) > 1
+}
+
 // renderText renders an assistant text entry.
+// Lines ending with '?' are rendered bold and colored as questions;
+// all other lines (including numbered options/responses) stay plain.
 func (l *LogViewer) renderText(entry LogEntry) []string {
 	if entry.Text == "" {
 		return []string{}
 	}
 
 	textStyle := lipgloss.NewStyle().Foreground(TextColor)
-	wrapped := wrapText(entry.Text, l.width-4)
-	lines := strings.Split(wrapped, "\n")
+	questionStyle := lipgloss.NewStyle().Foreground(PrimaryColor).Bold(true)
+
+	// Process each original line individually so that question detection
+	// works correctly even when a long question wraps across multiple lines.
+	origLines := strings.Split(entry.Text, "\n")
 
 	var result []string
-	for _, line := range lines {
-		result = append(result, textStyle.Render(line))
+	for _, origLine := range origLines {
+		wrapped := wrapText(origLine, l.width-4)
+		wrappedLines := strings.Split(wrapped, "\n")
+
+		style := textStyle
+		if isQuestionLine(origLine) {
+			style = questionStyle
+		}
+		for _, wl := range wrappedLines {
+			result = append(result, style.Render(wl))
+		}
 	}
 	return result
 }
@@ -584,6 +630,20 @@ func stripLineNumbers(code string) string {
 	return strings.Join(result, "\n")
 }
 
+// renderIterationStart renders an iteration start marker.
+func (l *LogViewer) renderIterationStart(entry LogEntry) []string {
+	iterStyle := lipgloss.NewStyle().Foreground(MutedColor).Bold(true)
+	dividerStyle := lipgloss.NewStyle().Foreground(MutedColor)
+	divider := dividerStyle.Render(strings.Repeat("─", l.width-4))
+
+	return []string{
+		"",
+		divider,
+		iterStyle.Render(fmt.Sprintf("  Iteration %d", entry.Iteration)),
+		divider,
+	}
+}
+
 // renderStoryStarted renders a story started marker.
 func (l *LogViewer) renderStoryStarted(entry LogEntry) []string {
 	storyStyle := lipgloss.NewStyle().
@@ -598,6 +658,25 @@ func (l *LogViewer) renderStoryStarted(entry LogEntry) []string {
 		"",
 		divider,
 		storyStyle.Render(fmt.Sprintf("▶ Working on: %s", entry.StoryID)),
+		divider,
+		"",
+	}
+}
+
+// renderStoryCompleted renders a story completion banner.
+func (l *LogViewer) renderStoryCompleted(entry LogEntry) []string {
+	style := lipgloss.NewStyle().Foreground(SuccessColor).Bold(true)
+	dividerStyle := lipgloss.NewStyle().Foreground(SuccessColor)
+	divider := dividerStyle.Render(strings.Repeat("─", l.width-4))
+
+	label := fmt.Sprintf("  ✓ %s complete", entry.StoryID)
+	if entry.Text != "" {
+		label = fmt.Sprintf("  ✓ %s: %s", entry.StoryID, entry.Text)
+	}
+
+	return []string{
+		divider,
+		style.Render(label),
 		divider,
 		"",
 	}
