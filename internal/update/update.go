@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultReleasesURL = "https://api.github.com/repos/MiniCodeMonkey/melliza/releases/latest"
+	defaultReleasesURL = "https://api.github.com/repos/lvcoi/melliza/releases/latest"
 	downloadTimeout    = 5 * time.Minute
 	checkTimeout       = 10 * time.Second
 )

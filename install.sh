@@ -215,8 +215,8 @@ parse_args() {
 Melliza Install Script
 
 Usage:
-    curl -fsSL https://raw.githubusercontent.com/MiniCodeMonkey/melliza/refs/heads/main/install.sh | sh
-    curl -fsSL https://raw.githubusercontent.com/MiniCodeMonkey/melliza/refs/heads/main/install.sh | sh -s -- --version v0.1.0
+    curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/main/install.sh | sh
+    curl -fsSL https://raw.githubusercontent.com/lvcoi/melliza/main/install.sh | sh -s -- --version v0.1.0
 
 Options:
     --version, -v VERSION    Install a specific version (e.g., v0.1.0)
