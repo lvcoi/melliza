@@ -39,6 +39,12 @@ func (d *DiffViewer) SetSize(width, height int) {
 	oldWidth := d.width
 	d.width = width
 	d.height = height
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
 	d.vp.SetWidth(width)
 	d.vp.SetHeight(height)
 
@@ -74,6 +80,7 @@ func (d *DiffViewer) LoadForStory(storyID, title string) {
 		d.lines = nil
 		d.stats = ""
 		d.vp.SetContent("")
+		d.vp.GotoTop()
 		return
 	}
 
@@ -99,6 +106,7 @@ func (d *DiffViewer) loadDiff(storyID, commitHash string) {
 		d.lines = nil
 		d.stats = ""
 		d.vp.SetContent("")
+		d.vp.GotoTop()
 		return
 	}
 
@@ -108,11 +116,13 @@ func (d *DiffViewer) loadDiff(storyID, commitHash string) {
 		d.lines = nil
 		d.stats = ""
 		d.vp.SetContent("")
+		d.vp.GotoTop()
 		return
 	}
 
 	d.lines = strings.Split(diff, "\n")
 	d.vp.SetContent(d.renderStyledContent())
+	d.vp.GotoTop()
 
 	if commitHash != "" {
 		stats, err := git.GetDiffStatsForCommit(d.baseDir, commitHash)

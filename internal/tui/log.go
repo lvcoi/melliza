@@ -125,8 +125,16 @@ func (l *LogViewer) AddEvent(event loop.Event) {
 func (l *LogViewer) SetSize(width, height int) {
 	widthChanged := l.width != width
 	l.width = width
-	l.vp.SetWidth(width)
-	l.vp.SetHeight(height)
+	vpWidth := width
+	vpHeight := height
+	if vpWidth < 1 {
+		vpWidth = 1
+	}
+	if vpHeight < 1 {
+		vpHeight = 1
+	}
+	l.vp.SetWidth(vpWidth)
+	l.vp.SetHeight(vpHeight)
 
 	if widthChanged && width > 0 {
 		l.rebuildCache()
