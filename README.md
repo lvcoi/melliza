@@ -17,6 +17,10 @@
 
 ---
 
+> **v0.2.0 Released** — Migrated to native viewport scrolling, added multi-line text input and confirmation dialogs in PRD creation, fixed nil pointer panics, and improved log viewer performance. See the [release notes](https://github.com/lvcoi/melliza/releases/tag/v0.2.0).
+
+---
+
 Melliza is an autonomous agent loop that orchestrates the **Gemini CLI** to work through user stories in a **Product Requirements Document (PRD)**. 
 
 Built on the "Ralph Wiggum loop" pattern, Melliza breaks down complex project requirements into manageable tasks, invokes Gemini to implement them one by one, and maintains persistent progress tracking.
