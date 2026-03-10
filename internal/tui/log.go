@@ -10,6 +10,7 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 	"github.com/lvcoi/melliza/internal/loop"
 )
@@ -30,21 +31,26 @@ type LogEntry struct {
 
 // LogViewer manages the log viewport state.
 type LogViewer struct {
+	vp               viewport.Model
 	entries          []LogEntry
-	scrollPos        int    // Current scroll position (top line index)
-	height           int    // Viewport height (lines)
-	width            int    // Viewport width
-	autoScroll       bool   // Auto-scroll to bottom when new content arrives
-	lastReadFilePath string // Track the last Read tool's file path for syntax highlighting
-	totalLineCount   int    // Running total of all rendered lines (O(1) lookup)
-	verbose          bool   // Whether to show raw stdout/stderr events
+	contentBuf       strings.Builder // Running content buffer for viewport (avoids full rebuild on each AddEvent)
+	contentDirty     bool            // True when contentBuf has changed since last viewport sync
+	width            int             // Viewport width (used for line wrapping in renderEntry)
+	autoScroll       bool            // Auto-scroll to bottom when new content arrives
+	lastReadFilePath string          // Track the last Read tool's file path for syntax highlighting
+	totalLineCount   int             // Running total of all rendered lines (O(1) lookup)
+	verbose          bool            // Whether to show raw stdout/stderr events
 }
 
 // NewLogViewer creates a new log viewer.
 func NewLogViewer() *LogViewer {
+	vp := viewport.New()
+	vp.MouseWheelEnabled = false // app.go dispatches scroll externally
+	vp.KeyMap = viewport.KeyMap{} // disable internal keybindings
+
 	return &LogViewer{
+		vp:         vp,
 		entries:    make([]LogEntry, 0),
-		scrollPos:  0,
 		autoScroll: true,
 		verbose:    false,
 	}
@@ -92,7 +98,7 @@ func (l *LogViewer) AddEvent(event loop.Event) {
 		// Always show these semantic events
 	case loop.EventStderr:
 		// Show error-bearing stderr lines even in non-verbose mode
-		if !l.verbose && !isErrorLine(event.Text) {
+		if !l.verbose && !loop.IsErrorLine(event.Text) {
 			return
 		}
 	case loop.EventStdout:
@@ -111,20 +117,31 @@ func (l *LogViewer) AddEvent(event loop.Event) {
 	}
 	l.entries = append(l.entries, entry)
 
-	// Auto-scroll to bottom if enabled
-	if l.autoScroll && l.height > 0 {
-		l.scrollToBottom()
-	}
+	// Append new entry to viewport content (flushed lazily at render time)
+	l.appendEntryToViewport(entry)
 }
 
 // SetSize sets the viewport dimensions. Rebuilds the line cache if width changed.
 func (l *LogViewer) SetSize(width, height int) {
 	widthChanged := l.width != width
 	l.width = width
-	l.height = height
+	vpWidth := width
+	vpHeight := height
+	if vpWidth < 1 {
+		vpWidth = 1
+	}
+	if vpHeight < 1 {
+		vpHeight = 1
+	}
+	l.vp.SetWidth(vpWidth)
+	l.vp.SetHeight(vpHeight)
 
 	if widthChanged && width > 0 {
 		l.rebuildCache()
+		l.syncViewportContent()
+		if l.autoScroll {
+			l.vp.GotoBottom()
+		}
 	}
 }
 
@@ -139,80 +156,80 @@ func (l *LogViewer) rebuildCache() {
 	}
 }
 
+// syncViewportContent rebuilds the entire content buffer from all entries.
+// Used after width changes that invalidate cached line wrapping.
+func (l *LogViewer) syncViewportContent() {
+	l.contentBuf.Reset()
+	for _, entry := range l.entries {
+		for _, line := range entry.cachedLines {
+			if l.contentBuf.Len() > 0 {
+				l.contentBuf.WriteByte('\n')
+			}
+			l.contentBuf.WriteString(line)
+		}
+	}
+	l.vp.SetContent(l.contentBuf.String())
+}
+
+// appendEntryToViewport incrementally appends a single entry's cached lines
+// to the content buffer. The viewport is updated lazily at render time to
+// avoid O(n) string copies on every AddEvent.
+func (l *LogViewer) appendEntryToViewport(entry LogEntry) {
+	for _, line := range entry.cachedLines {
+		if l.contentBuf.Len() > 0 {
+			l.contentBuf.WriteByte('\n')
+		}
+		l.contentBuf.WriteString(line)
+	}
+	l.contentDirty = true
+}
+
 // ScrollUp scrolls up by one line.
 func (l *LogViewer) ScrollUp() {
-	if l.scrollPos > 0 {
-		l.scrollPos--
+	l.flushContent()
+	l.vp.ScrollUp(1)
+	if !l.vp.AtBottom() {
 		l.autoScroll = false
 	}
 }
 
 // ScrollDown scrolls down by one line.
 func (l *LogViewer) ScrollDown() {
-	maxScroll := l.maxScrollPos()
-	if l.scrollPos < maxScroll {
-		l.scrollPos++
-	}
-	// Re-enable auto-scroll if at bottom
-	if l.scrollPos >= maxScroll {
+	l.flushContent()
+	l.vp.ScrollDown(1)
+	if l.vp.AtBottom() {
 		l.autoScroll = true
 	}
 }
 
 // PageUp scrolls up by half a page.
 func (l *LogViewer) PageUp() {
-	halfPage := l.height / 2
-	if halfPage < 1 {
-		halfPage = 1
-	}
-	l.scrollPos -= halfPage
-	if l.scrollPos < 0 {
-		l.scrollPos = 0
-	}
+	l.flushContent()
+	l.vp.HalfPageUp()
 	l.autoScroll = false
 }
 
 // PageDown scrolls down by half a page.
 func (l *LogViewer) PageDown() {
-	halfPage := l.height / 2
-	if halfPage < 1 {
-		halfPage = 1
-	}
-	l.scrollPos += halfPage
-	maxScroll := l.maxScrollPos()
-	if l.scrollPos > maxScroll {
-		l.scrollPos = maxScroll
-	}
-	// Re-enable auto-scroll if at bottom
-	if l.scrollPos >= maxScroll {
+	l.flushContent()
+	l.vp.HalfPageDown()
+	if l.vp.AtBottom() {
 		l.autoScroll = true
 	}
 }
 
 // ScrollToTop scrolls to the top.
 func (l *LogViewer) ScrollToTop() {
-	l.scrollPos = 0
+	l.flushContent()
+	l.vp.GotoTop()
 	l.autoScroll = false
 }
 
 // ScrollToBottom (exported) scrolls to the bottom.
 func (l *LogViewer) ScrollToBottom() {
-	l.scrollToBottom()
-}
-
-// scrollToBottom scrolls to the bottom.
-func (l *LogViewer) scrollToBottom() {
-	l.scrollPos = l.maxScrollPos()
+	l.flushContent()
+	l.vp.GotoBottom()
 	l.autoScroll = true
-}
-
-// maxScrollPos returns the maximum scroll position.
-func (l *LogViewer) maxScrollPos() int {
-	maxPos := l.totalLineCount - l.height
-	if maxPos < 0 {
-		return 0
-	}
-	return maxPos
 }
 
 // totalLines returns the total number of rendered lines (O(1)).
@@ -297,12 +314,27 @@ func (l *LogViewer) IsAutoScrolling() bool {
 // Clear clears all log entries.
 func (l *LogViewer) Clear() {
 	l.entries = make([]LogEntry, 0)
-	l.scrollPos = 0
 	l.autoScroll = true
 	l.totalLineCount = 0
+	l.contentBuf.Reset()
+	l.contentDirty = false
+	l.vp.SetContent("")
+	l.vp.GotoTop()
 }
 
-// Render renders only the visible portion of the log viewer.
+// flushContent syncs the content buffer to the viewport if dirty.
+func (l *LogViewer) flushContent() {
+	if !l.contentDirty {
+		return
+	}
+	l.vp.SetContent(l.contentBuf.String())
+	if l.autoScroll {
+		l.vp.GotoBottom()
+	}
+	l.contentDirty = false
+}
+
+// Render renders the log viewer.
 func (l *LogViewer) Render() string {
 	if len(l.entries) == 0 {
 		emptyStyle := lipgloss.NewStyle().
@@ -311,53 +343,10 @@ func (l *LogViewer) Render() string {
 		return emptyStyle.Render("No log entries yet. Start the loop to see Gemini's activity.")
 	}
 
-	// Calculate visible range
-	startLine := l.scrollPos
-	if startLine < 0 {
-		startLine = 0
-	}
-	if startLine >= l.totalLineCount {
-		startLine = l.totalLineCount - 1
-		if startLine < 0 {
-			startLine = 0
-		}
-	}
-
-	endLine := startLine + l.height
-	if endLine > l.totalLineCount {
-		endLine = l.totalLineCount
-	}
-
-	// Collect only visible lines by scanning cached entries
-	currentLine := 0
-	var visibleLines []string
-
-	for i := range l.entries {
-		lines := l.entries[i].cachedLines
-		entryEnd := currentLine + len(lines)
-
-		// Skip entries entirely before the viewport
-		if entryEnd <= startLine {
-			currentLine = entryEnd
-			continue
-		}
-		// Stop once we're past the viewport
-		if currentLine >= endLine {
-			break
-		}
-
-		// This entry has some visible lines
-		for j, line := range lines {
-			lineNum := currentLine + j
-			if lineNum >= startLine && lineNum < endLine {
-				visibleLines = append(visibleLines, line)
-			}
-		}
-		currentLine = entryEnd
-	}
+	l.flushContent()
+	content := l.vp.View()
 
 	// Add cursor indicator at bottom if streaming
-	content := strings.Join(visibleLines, "\n")
 	if l.autoScroll && len(l.entries) > 0 {
 		lastEntry := l.entries[len(l.entries)-1]
 		if lastEntry.Type == loop.EventAssistantText || lastEntry.Type == loop.EventToolStart {
@@ -367,20 +356,6 @@ func (l *LogViewer) Render() string {
 	}
 
 	return content
-}
-
-// isErrorLine returns true if a stderr line contains error-relevant content.
-func isErrorLine(text string) bool {
-	lower := strings.ToLower(text)
-	return strings.Contains(lower, "error") ||
-		strings.Contains(lower, "unavailable") ||
-		strings.Contains(lower, "forbidden") ||
-		strings.Contains(lower, "unauthorized") ||
-		strings.Contains(lower, "quota") ||
-		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "timeout") ||
-		strings.Contains(lower, "apikey") ||
-		strings.Contains(lower, "status:")
 }
 
 // renderEntry renders a single log entry as lines.
