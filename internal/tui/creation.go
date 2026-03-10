@@ -9,12 +9,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/lvcoi/melliza/internal/loop"
 )
 
 // ChatMode distinguishes between creating a new PRD and editing an existing one.
@@ -83,7 +86,7 @@ type PRDCreationChat struct {
 	mode       ChatMode
 	messages   []Message
 	sessionID  string
-	input      textinput.Model
+	input      textarea.Model
 	viewport   viewport.Model
 	width      int
 	height     int
@@ -104,11 +107,17 @@ type PRDCreationChat struct {
 
 // NewPRDCreationChat creates a new PRDCreationChat component.
 func NewPRDCreationChat(baseDir, prdName, context string) *PRDCreationChat {
-	ti := textinput.New()
-	ti.Placeholder = "Type your response..."
-	ti.Focus()
-	ti.CharLimit = 1000
-	ti.SetWidth(50)
+	ta := textarea.New()
+	ta.Placeholder = "Type your response..."
+	ta.Focus()
+	ta.CharLimit = 1000
+	ta.SetWidth(50)
+	ta.SetHeight(3)
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	km := ta.KeyMap
+	km.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	ta.KeyMap = km
 
 	vp := viewport.New()
 
@@ -118,7 +127,7 @@ func NewPRDCreationChat(baseDir, prdName, context string) *PRDCreationChat {
 		baseDir:   baseDir,
 		context:   context,
 		messages:  make([]Message, 0),
-		input:     ti,
+		input:     ta,
 		viewport:  vp,
 		loading:   false,
 		done:      false,
@@ -138,7 +147,7 @@ func (c *PRDCreationChat) SetSize(width, height int) {
 	
 	// Subtract header, footer, and borders
 	vpWidth := width - 4
-	vpHeight := height - 13 // Account for header, input field, footer, and borders
+	vpHeight := height - 15 // Account for header, textarea input, footer, and borders
 
 	if vpWidth < 1 {
 		vpWidth = 1
@@ -149,7 +158,8 @@ func (c *PRDCreationChat) SetSize(width, height int) {
 
 	c.viewport.SetWidth(vpWidth)
 	c.viewport.SetHeight(vpHeight)
-	c.input.SetWidth(vpWidth - 10)
+	c.input.SetWidth(vpWidth - 6)
+	c.input.SetHeight(3)
 
 	c.renderViewport()
 }
@@ -191,14 +201,14 @@ func (c *PRDCreationChat) SendMessage() tea.Cmd {
 	if content == "/exit" {
 		c.done = true
 		c.messages = append(c.messages, Message{Role: RoleUser, Content: content})
-		c.input.SetValue("")
+		c.input.Reset()
 		c.renderViewport()
 		c.viewport.GotoBottom()
 		return nil
 	}
 
 	c.messages = append(c.messages, Message{Role: RoleUser, Content: content})
-	c.input.SetValue("")
+	c.input.Reset()
 	c.loading = true
 	c.loadingStart = time.Now()
 	c.lastJokeChange = time.Now()
@@ -238,28 +248,37 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 			return ChatEventMsg{Type: "error", Content: err.Error()}
 		}
 
-		// Process stderr in a goroutine to avoid blocking
+		// Capture stderr lines for error reporting AND log to file
+		var stderrLines []string
+		var stderrMu sync.Mutex
+		stderrDone := make(chan struct{})
 		go func() {
-			// Log stderr to gemini.log for debugging
+			defer close(stderrDone)
 			prdDir := filepath.Join(c.baseDir, ".melliza", "prds", c.prdName)
 			logPath := filepath.Join(prdDir, "gemini.log")
 			logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if logFile != nil {
 				defer logFile.Close()
-				scanner := bufio.NewScanner(stderr)
-				for scanner.Scan() {
-					logFile.WriteString("[stderr] " + scanner.Text() + "\n")
+			}
+			scanner := bufio.NewScanner(stderr)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if logFile != nil {
+					logFile.WriteString("[stderr] " + line + "\n")
 				}
-			} else {
-				// Sink stderr if log file can't be opened
-				scanner := bufio.NewScanner(stderr)
-				for scanner.Scan() {}
+				stderrMu.Lock()
+				stderrLines = append(stderrLines, line)
+				if len(stderrLines) > 20 {
+					stderrLines = stderrLines[len(stderrLines)-20:]
+				}
+				stderrMu.Unlock()
 			}
 		}()
 
 		scanner := bufio.NewScanner(stdout)
 		var lastAssistantMsg string
 		var capturedSessionID string
+		var resultError string
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -278,20 +297,26 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 				content, _ := msg["content"].(string)
 				if role == "assistant" {
 					lastAssistantMsg += content
-					// We could emit deltas here for real-time streaming,
-					// but let's stick to full messages for now to keep it simple
+				}
+			case "result":
+				// Gemini emits a result event with status:"error" when API calls fail
+				status, _ := msg["status"].(string)
+				if status == "error" {
+					if errObj, ok := msg["error"].(map[string]interface{}); ok {
+						if errMsg, ok := errObj["message"].(string); ok {
+							resultError = errMsg
+						}
+					}
 				}
 			}
 		}
 
 		waitErr := cmd.Wait()
+		<-stderrDone // Ensure all stderr is captured before using it
 
 		// If we captured assistant output, return it even if Gemini exited non-zero.
 		// Gemini often exits with code 1 due to stdin closing, extension errors,
 		// or API timeouts — but may have still produced useful output and written files.
-		// NOTE: a non-empty capturedSessionID alone (init-only output) does NOT count as
-		// success; if Gemini emitted only an init event and then exited non-zero we must
-		// surface the error instead of returning a silent empty message.
 		if lastAssistantMsg != "" {
 			return ChatEventMsg{
 				Type:      "message",
@@ -300,8 +325,20 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 			}
 		}
 
+		// If Gemini reported a structured error in its result event, surface that
+		if resultError != "" {
+			return ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini API error: %s", resultError)}
+		}
+
 		if waitErr != nil {
-			return ChatEventMsg{Type: "error", Content: waitErr.Error()}
+			// Fall back to stderr for error context
+			stderrMu.Lock()
+			errContext := loop.FilterStderrForError(stderrLines)
+			stderrMu.Unlock()
+			if errContext != "" {
+				return ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini failed: %s", errContext)}
+			}
+			return ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini exited with error: %s", waitErr.Error())}
 		}
 
 		return ChatEventMsg{
@@ -481,11 +518,11 @@ func (c *PRDCreationChat) View() tea.View {
 	b.WriteString("\n")
 	var shortcuts string
 	if c.done {
-		shortcuts = "Enter: convert  │  Esc: back  │  q: quit"
+		shortcuts = "Enter: convert  │  Esc: back  │  Ctrl+C: quit"
 	} else if c.loading {
-		shortcuts = "Esc: back  │  q: quit  │  pgup/pgdn: scroll"
+		shortcuts = "Esc: back  │  Ctrl+C: quit  │  pgup/pgdn: scroll"
 	} else {
-		shortcuts = "Enter: send  │  /exit: finish  │  Esc: back  │  q: quit  │  pgup/pgdn: scroll"
+		shortcuts = "Enter: send  │  Shift+Enter: newline  │  /exit: finish  │  Esc: back  │  pgup/pgdn: scroll"
 	}
 	b.WriteString(lipgloss.NewStyle().Foreground(MutedColor).Padding(0, 1).Render(shortcuts))
 
