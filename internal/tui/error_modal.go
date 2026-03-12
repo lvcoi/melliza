@@ -244,37 +244,5 @@ func (m *ErrorModal) Render() string {
 		Width(modalWidth)
 
 	modal := modalStyle.Render(b.String())
-	return m.centerModal(modal)
-}
-
-func (m *ErrorModal) centerModal(modal string) string {
-	lines := strings.Split(modal, "\n")
-	mh := len(lines)
-	mw := 0
-	for _, l := range lines {
-		if w := lipgloss.Width(l); w > mw {
-			mw = w
-		}
-	}
-
-	top := (m.height - mh) / 2
-	left := (m.width - mw) / 2
-	if top < 0 {
-		top = 0
-	}
-	if left < 0 {
-		left = 0
-	}
-
-	var out strings.Builder
-	pad := strings.Repeat(" ", left)
-	for i := 0; i < top; i++ {
-		out.WriteString("\n")
-	}
-	for _, line := range lines {
-		out.WriteString(pad)
-		out.WriteString(line)
-		out.WriteString("\n")
-	}
-	return out.String()
+	return CenterModal(modal, m.width, m.height)
 }

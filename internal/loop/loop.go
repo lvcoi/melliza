@@ -374,12 +374,7 @@ func (l *Loop) runIteration(ctx context.Context) error {
 			// Emit stderr event so TUI can show it
 			l.events <- Event{Type: EventStderr, Iteration: iter, Text: line}
 			// Detect rate-limit / quota errors; emit a dedicated event and stop the loop
-			lower := strings.ToLower(line)
-			if strings.Contains(lower, "rate limit") ||
-				strings.Contains(lower, "ratelimit") ||
-				strings.Contains(lower, "quota") ||
-				strings.Contains(lower, "429") ||
-				strings.Contains(lower, "resource exhausted") {
+			if IsRateLimitLine(line) {
 				l.events <- Event{Type: EventRateLimit, Iteration: iter, Text: line}
 				l.Stop()
 			}
@@ -445,6 +440,23 @@ func (l *Loop) runIteration(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// IsRateLimitLine returns true if a stderr line indicates a rate-limit or quota error.
+// It uses specific patterns to avoid false positives from file paths, ports, or memory addresses
+// that happen to contain "429".
+func IsRateLimitLine(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "ratelimit") ||
+		strings.Contains(lower, "quota") ||
+		strings.Contains(lower, "resource exhausted") ||
+		strings.Contains(lower, "http 429") ||
+		strings.Contains(lower, "status 429") ||
+		strings.Contains(lower, "code 429") ||
+		strings.Contains(lower, "error 429") ||
+		strings.Contains(lower, "429 too many") ||
+		strings.Contains(lower, "429 resource")
 }
 
 // IsErrorLine returns true if a stderr line contains error-relevant content.

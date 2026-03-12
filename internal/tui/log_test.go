@@ -1,6 +1,12 @@
 package tui
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/lvcoi/melliza/internal/loop"
+)
 
 func TestGetToolIcon(t *testing.T) {
 	tests := []struct {
@@ -162,6 +168,122 @@ func TestLogViewer_IsAutoScrolling(t *testing.T) {
 	// autoScroll should still be true if at top (nothing to scroll up from)
 	if !lv.IsAutoScrolling() {
 		t.Error("Expected IsAutoScrolling to remain true when at top")
+	}
+}
+
+// ── Fix 1: Duplicate-on-reload log bug ───────────────────────────────────────
+
+func TestLogViewer_SaveLoadNoDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "test.jsonl")
+
+	lv := NewLogViewer()
+	lv.SetSize(80, 40)
+
+	// Write 3 entries via AddEvent + AppendEntry (simulates live events)
+	for i, text := range []string{"event1", "event2", "event3"} {
+		evt := loop.Event{Type: loop.EventAssistantText, Iteration: i + 1, Text: text}
+		lv.AddEvent(evt)
+		if len(lv.entries) > 0 {
+			_ = lv.AppendEntry(logPath, lv.entries[len(lv.entries)-1])
+		}
+	}
+	if len(lv.entries) != 3 {
+		t.Fatalf("expected 3 entries after add, got %d", len(lv.entries))
+	}
+
+	// Simulate switch: save → clear → load
+	_ = lv.SaveEntries(logPath)
+	lv.Clear()
+	_ = lv.LoadEntries(logPath)
+
+	if len(lv.entries) != 3 {
+		t.Fatalf("expected 3 entries after load, got %d", len(lv.entries))
+	}
+
+	// Rewrite file to match in-memory state (the fix)
+	_ = lv.SaveEntries(logPath)
+
+	// Add a new live event + append
+	newEvt := loop.Event{Type: loop.EventAssistantText, Iteration: 4, Text: "event4"}
+	lv.AddEvent(newEvt)
+	if len(lv.entries) > 0 {
+		_ = lv.AppendEntry(logPath, lv.entries[len(lv.entries)-1])
+	}
+
+	// Simulate another switch cycle: save → clear → load
+	_ = lv.SaveEntries(logPath)
+	lv.Clear()
+	_ = lv.LoadEntries(logPath)
+
+	if len(lv.entries) != 4 {
+		t.Errorf("expected 4 entries after second reload, got %d", len(lv.entries))
+	}
+
+	// Verify no duplicates by checking entry text
+	texts := make(map[string]int)
+	for _, e := range lv.entries {
+		texts[e.Text]++
+	}
+	for text, count := range texts {
+		if count > 1 {
+			t.Errorf("duplicate entry %q appeared %d times", text, count)
+		}
+	}
+}
+
+func TestLogViewer_LoadEntries_NonExistentFile(t *testing.T) {
+	lv := NewLogViewer()
+	err := lv.LoadEntries("/nonexistent/path/log.jsonl")
+	if err != nil {
+		t.Errorf("expected nil error for nonexistent file, got %v", err)
+	}
+	if len(lv.entries) != 0 {
+		t.Error("expected 0 entries for nonexistent file")
+	}
+}
+
+func TestLogViewer_SaveEntries_EmptyIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "test.jsonl")
+
+	lv := NewLogViewer()
+	err := lv.SaveEntries(logPath)
+	if err != nil {
+		t.Errorf("expected nil error for empty save, got %v", err)
+	}
+	// File should NOT be created for empty entries
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("expected no file to be created for empty save")
+	}
+}
+
+// ── Fix 2: LastEntry accessor ────────────────────────────────────────────────
+
+func TestLogViewer_LastEntry_Empty(t *testing.T) {
+	lv := NewLogViewer()
+	_, ok := lv.LastEntry()
+	if ok {
+		t.Error("expected LastEntry() to return false for empty log")
+	}
+}
+
+func TestLogViewer_LastEntry_WithEntries(t *testing.T) {
+	lv := NewLogViewer()
+	lv.SetSize(80, 40)
+
+	lv.AddEvent(loop.Event{Type: loop.EventAssistantText, Iteration: 1, Text: "first"})
+	lv.AddEvent(loop.Event{Type: loop.EventAssistantText, Iteration: 2, Text: "second"})
+
+	entry, ok := lv.LastEntry()
+	if !ok {
+		t.Fatal("expected LastEntry() to return true")
+	}
+	if entry.Text != "second" {
+		t.Errorf("expected last entry text 'second', got %q", entry.Text)
+	}
+	if entry.Iteration != 2 {
+		t.Errorf("expected last entry iteration 2, got %d", entry.Iteration)
 	}
 }
 

@@ -1132,11 +1132,8 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 		a.iteration = event.Iteration
 		// Add event to log viewer and persist to disk
 		a.logViewer.AddEvent(event)
-		if len(a.logViewer.entries) > 0 {
-			_ = a.logViewer.AppendEntry(
-				tuiLogPath(a.prdPath),
-				a.logViewer.entries[len(a.logViewer.entries)-1],
-			)
+		if entry, ok := a.logViewer.LastEntry(); ok {
+			_ = a.logViewer.AppendEntry(tuiLogPath(a.prdPath), entry)
 		}
 	}
 
@@ -2511,6 +2508,9 @@ func (a App) switchToPRD(name, prdPath string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Persist the current PRD's log to disk before clearing (must use OLD prdPath)
+	_ = a.logViewer.SaveEntries(tuiLogPath(a.prdPath))
+
 	// Update app state
 	a.prd = newPRD
 	a.prdPath = prdPath
@@ -2535,14 +2535,14 @@ func (a App) switchToPRD(name, prdPath string) (tea.Model, tea.Cmd) {
 	a.tabBar.SetActiveByName(name)
 	a.tabBar.Refresh()
 
-	// Persist the current PRD's log to disk before clearing
-	_ = a.logViewer.SaveEntries(tuiLogPath(a.prdPath))
-
 	// Clear log viewer and story timing (each PRD has its own log/timing)
 	a.logViewer.Clear()
 
-	// Restore any previously-saved log for the new PRD
+	// Restore any previously-saved log for the new PRD, then rewrite
+	// the file to match in-memory state (prevents duplicates from
+	// filtered events or append-after-load races).
 	_ = a.logViewer.LoadEntries(tuiLogPath(prdPath))
+	_ = a.logViewer.SaveEntries(tuiLogPath(prdPath))
 
 	a.storyTimings = nil
 	a.currentStoryID = ""

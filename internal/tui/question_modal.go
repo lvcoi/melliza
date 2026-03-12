@@ -41,7 +41,8 @@ var reOption = regexp.MustCompile(`(?m)^\s*[-*]?\s*([A-Ea-e])[.)]\s+(.+)`)
 
 // ParseQuestions attempts to extract structured Q&A from Gemini's markdown text.
 // Returns nil if fewer than 2 questions are found (don't trigger the modal for
-// regular prose).
+// regular prose). Requires at least one question mark in each question's text
+// to avoid false positives on numbered implementation steps.
 func ParseQuestions(text string) []ParsedQuestion {
 	var questions []ParsedQuestion
 
@@ -59,9 +60,16 @@ func ParseQuestions(text string) []ParsedQuestion {
 		}
 		block := text[loc[0]:end]
 
-		// Extract question text (first line of block, stripped of numbering)
-		firstLine := strings.TrimSpace(strings.SplitN(block, "\n", 2)[0])
+		// Extract question text (first line of block, stripped of numbering).
+		// TrimSpace the block first because the regex match may include a leading \n.
+		firstLine := strings.TrimSpace(strings.SplitN(strings.TrimSpace(block), "\n", 2)[0])
 		firstLine = regexp.MustCompile(`^\d+[.)]\s*`).ReplaceAllString(firstLine, "")
+
+		// Require the question text to contain a question mark — this filters
+		// out numbered implementation steps with lettered sub-items.
+		if !strings.Contains(firstLine, "?") {
+			continue
+		}
 
 		// Extract lettered options from the block
 		optMatches := reOption.FindAllStringSubmatch(block, -1)
@@ -432,35 +440,5 @@ func (m *QuestionModal) Render() string {
 		Width(modalWidth)
 
 	modal := modalStyle.Render(b.String())
-	return m.centerModal(modal)
-}
-
-func (m *QuestionModal) centerModal(modal string) string {
-	lines := strings.Split(modal, "\n")
-	mh := len(lines)
-	mw := 0
-	for _, l := range lines {
-		if w := lipgloss.Width(l); w > mw {
-			mw = w
-		}
-	}
-	top := (m.height - mh) / 2
-	left := (m.width - mw) / 2
-	if top < 0 {
-		top = 0
-	}
-	if left < 0 {
-		left = 0
-	}
-	var out strings.Builder
-	pad := strings.Repeat(" ", left)
-	for i := 0; i < top; i++ {
-		out.WriteString("\n")
-	}
-	for _, line := range lines {
-		out.WriteString(pad)
-		out.WriteString(line)
-		out.WriteString("\n")
-	}
-	return out.String()
+	return CenterModal(modal, m.width, m.height)
 }

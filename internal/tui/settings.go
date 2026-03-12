@@ -251,7 +251,7 @@ func (s *SettingsOverlay) Render() string {
 
 	modal := modalStyle.Render(content.String())
 
-	return centerModal(modal, s.width, s.height)
+	return CenterModal(modal, s.width, s.height)
 }
 
 // renderItems renders the settings items grouped by section.

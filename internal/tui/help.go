@@ -212,7 +212,7 @@ func (h *HelpOverlay) Render() string {
 	modal := modalStyle.Render(content.String())
 
 	// Center the modal on screen
-	return h.centerModal(modal)
+	return CenterModal(modal, h.width, h.height)
 }
 
 // renderCategory renders a single category of shortcuts.
@@ -249,45 +249,4 @@ func (h *HelpOverlay) renderCategory(w *strings.Builder, cat ShortcutCategory, w
 		w.WriteString("\n")
 	}
 	w.WriteString("\n")
-}
-
-// centerModal centers the modal on the screen.
-func (h *HelpOverlay) centerModal(modal string) string {
-	lines := strings.Split(modal, "\n")
-	modalHeight := len(lines)
-	modalWidth := 0
-	for _, line := range lines {
-		if lipgloss.Width(line) > modalWidth {
-			modalWidth = lipgloss.Width(line)
-		}
-	}
-
-	// Calculate padding
-	topPadding := (h.height - modalHeight) / 2
-	leftPadding := (h.width - modalWidth) / 2
-
-	if topPadding < 0 {
-		topPadding = 0
-	}
-	if leftPadding < 0 {
-		leftPadding = 0
-	}
-
-	// Build centered content
-	var result strings.Builder
-
-	// Top padding
-	for i := 0; i < topPadding; i++ {
-		result.WriteString("\n")
-	}
-
-	// Modal lines with left padding
-	leftPad := strings.Repeat(" ", leftPadding)
-	for _, line := range lines {
-		result.WriteString(leftPad)
-		result.WriteString(line)
-		result.WriteString("\n")
-	}
-
-	return result.String()
 }

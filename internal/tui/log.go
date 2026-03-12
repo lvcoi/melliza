@@ -314,6 +314,14 @@ func (l *LogViewer) IsAutoScrolling() bool {
 	return l.autoScroll
 }
 
+// LastEntry returns the last log entry, or false if empty.
+func (l *LogViewer) LastEntry() (LogEntry, bool) {
+	if len(l.entries) == 0 {
+		return LogEntry{}, false
+	}
+	return l.entries[len(l.entries)-1], true
+}
+
 // Clear clears all log entries.
 func (l *LogViewer) Clear() {
 	l.entries = make([]LogEntry, 0)
