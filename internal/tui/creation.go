@@ -406,10 +406,11 @@ func (c *PRDCreationChat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			updated, modalCmd := c.questionModal.Update(msg)
 			c.questionModal = updated
 			if c.questionModal.IsDone() {
+				cancelled := c.questionModal.Cancelled()
 				answer := c.questionModal.BuildAnswer()
 				c.showingQuestionModal = false
 				c.questionModal = nil
-				if answer != "" {
+				if !cancelled && answer != "" {
 					// Inject the answer as a user message and send to Gemini
 					c.input.SetValue(answer)
 					return c, c.SendMessage()

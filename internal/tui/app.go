@@ -178,6 +178,7 @@ type App struct {
 	selectedIndex       int
 	storiesScrollOffset int
 	detailsVP           viewport.Model
+	detailsVPContent    string // cached to avoid SetContent scroll-reset in View()
 	width              int
 	height             int
 	err           error
@@ -1109,9 +1110,11 @@ func (a App) handleErrorModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if a.manager != nil {
 			_ = a.manager.Stop(a.prdName)
 		}
+		a.consecutiveErrors[a.prdName] = 0
 		a.viewMode = a.previousViewMode
 		return a, cmd
 	default: // ErrorChoiceContinue / Esc
+		a.consecutiveErrors[a.prdName] = 0
 		a.viewMode = a.previousViewMode
 		return a, cmd
 	}
@@ -1133,7 +1136,9 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 		// Add event to log viewer and persist to disk
 		a.logViewer.AddEvent(event)
 		if entry, ok := a.logViewer.LastEntry(); ok {
-			_ = a.logViewer.AppendEntry(tuiLogPath(a.prdPath), entry)
+			if err := a.logViewer.AppendEntry(tuiLogPath(a.prdPath), entry); err != nil {
+				a.lastActivity = "Log write error: " + err.Error()
+			}
 		}
 	}
 
@@ -1217,8 +1222,12 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 			errMsg := ""
 			if event.Err != nil {
 				errMsg = event.Err.Error()
-				a.lastActivity = "Error: " + errMsg
+			} else if event.Text != "" {
+				errMsg = event.Text
+			} else {
+				errMsg = "Unknown error"
 			}
+			a.lastActivity = "Error: " + errMsg
 			// Show the modal on the 3rd consecutive failure (no story completed between)
 			if a.consecutiveErrors[prdName] >= 3 {
 				a.showErrorModal(errMsg)
@@ -2509,7 +2518,9 @@ func (a App) switchToPRD(name, prdPath string) (tea.Model, tea.Cmd) {
 	}
 
 	// Persist the current PRD's log to disk before clearing (must use OLD prdPath)
-	_ = a.logViewer.SaveEntries(tuiLogPath(a.prdPath))
+	if err := a.logViewer.SaveEntries(tuiLogPath(a.prdPath)); err != nil {
+		a.lastActivity = "Log save error: " + err.Error()
+	}
 
 	// Update app state
 	a.prd = newPRD
@@ -2541,8 +2552,12 @@ func (a App) switchToPRD(name, prdPath string) (tea.Model, tea.Cmd) {
 	// Restore any previously-saved log for the new PRD, then rewrite
 	// the file to match in-memory state (prevents duplicates from
 	// filtered events or append-after-load races).
-	_ = a.logViewer.LoadEntries(tuiLogPath(prdPath))
-	_ = a.logViewer.SaveEntries(tuiLogPath(prdPath))
+	if err := a.logViewer.LoadEntries(tuiLogPath(prdPath)); err != nil {
+		a.lastActivity = "Log load error: " + err.Error()
+	}
+	if err := a.logViewer.SaveEntries(tuiLogPath(prdPath)); err != nil {
+		a.lastActivity = "Log save error: " + err.Error()
+	}
 
 	a.storyTimings = nil
 	a.currentStoryID = ""

@@ -111,11 +111,12 @@ type QuestionModal struct {
 	selections  []int    // selected option index per question (-1 = Other)
 	otherInputs []textarea.Model
 
-	list    list.Model // options for the current question
-	listKeys questionListKeys
-	width   int
-	height  int
-	done    bool
+	list      list.Model // options for the current question
+	listKeys  questionListKeys
+	width     int
+	height    int
+	done      bool
+	cancelled bool
 }
 
 type questionListKeys struct {
@@ -278,6 +279,11 @@ func (m *QuestionModal) BuildAnswer() string {
 	return strings.Join(parts, ", ")
 }
 
+// Cancelled returns true if the user pressed Esc to dismiss the modal.
+func (m *QuestionModal) Cancelled() bool {
+	return m.cancelled
+}
+
 // currentOtherSelected returns true if the "Other" option is selected on the
 // current question.
 func (m *QuestionModal) currentOtherSelected() bool {
@@ -321,6 +327,7 @@ func (m *QuestionModal) Update(msg tea.Msg) (*QuestionModal, tea.Cmd) {
 				if sel.isOther {
 					m.selections[m.currentQ] = -1
 					m.otherInputs[m.currentQ].Focus()
+					return m, nil // Stay on this question so user can type
 				} else {
 					// Find option index in the current question's Options slice
 					qOpts := m.questions[m.currentQ].Options
@@ -335,8 +342,9 @@ func (m *QuestionModal) Update(msg tea.Msg) (*QuestionModal, tea.Cmd) {
 			}
 			return m.advance()
 		case msg.String() == "esc":
-			// Esc closes modal with whatever has been answered so far
+			// Esc cancels — caller should check Cancelled() before using BuildAnswer()
 			m.done = true
+			m.cancelled = true
 			return m, nil
 		}
 	}

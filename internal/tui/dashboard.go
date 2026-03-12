@@ -555,7 +555,11 @@ func (a *App) renderDetailsPanel(width, height int) string {
 	}
 	a.detailsVP.SetWidth(innerW)
 	a.detailsVP.SetHeight(innerH)
-	a.detailsVP.SetContent(content.String())
+	rendered := content.String()
+	if rendered != a.detailsVPContent {
+		a.detailsVPContent = rendered
+		a.detailsVP.SetContent(rendered)
+	}
 
 	return panelStyle.Width(width).Height(height).Render(a.detailsVP.View())
 }

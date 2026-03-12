@@ -143,9 +143,10 @@ func (m *ErrorModal) SetSize(width, height int) {
 
 // SetError stores the error text shown inside the modal header.
 func (m *ErrorModal) SetError(errText string) {
-	// Trim to keep the modal compact
-	if len(errText) > 160 {
-		errText = errText[:157] + "..."
+	// Trim to keep the modal compact (rune-safe to avoid splitting multi-byte UTF-8)
+	runes := []rune(errText)
+	if len(runes) > 160 {
+		errText = string(runes[:157]) + "..."
 	}
 	m.errText = errText
 	m.done = false

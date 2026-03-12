@@ -52,9 +52,10 @@ type Loop struct {
 	events          chan Event
 	geminiCmd       *exec.Cmd
 	logFile         *os.File
-	mu              sync.Mutex
-	stopped         bool
-	paused          bool
+	mu                 sync.Mutex
+	stopped            bool
+	paused             bool
+	rateLimitStopped   bool
 	retryConfig     RetryConfig
 	lastOutputTime  time.Time
 	watchdogTimeout time.Duration
@@ -363,6 +364,7 @@ func (l *Loop) runIteration(ctx context.Context) error {
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stderrDone)
+		rateLimitSent := false
 		scanner := bufio.NewScanner(stderr)
 		scanner.Buffer(make([]byte, 256*1024), 256*1024)
 		for scanner.Scan() {
@@ -373,9 +375,13 @@ func (l *Loop) runIteration(ctx context.Context) error {
 			l.mu.Unlock()
 			// Emit stderr event so TUI can show it
 			l.events <- Event{Type: EventStderr, Iteration: iter, Text: line}
-			// Detect rate-limit / quota errors; emit a dedicated event and stop the loop
-			if IsRateLimitLine(line) {
+			// Detect rate-limit / quota errors; emit a dedicated event and stop the loop (once)
+			if !rateLimitSent && IsRateLimitLine(line) {
+				rateLimitSent = true
 				l.events <- Event{Type: EventRateLimit, Iteration: iter, Text: line}
+				l.mu.Lock()
+				l.rateLimitStopped = true
+				l.mu.Unlock()
 				l.Stop()
 			}
 			// Keep last 10 lines for error context
@@ -427,6 +433,12 @@ func (l *Loop) runIteration(ctx context.Context) error {
 			return fmt.Errorf("watchdog timeout: no output for %s", l.watchdogTimeout)
 		}
 		if stopped {
+			l.mu.Lock()
+			rl := l.rateLimitStopped
+			l.mu.Unlock()
+			if rl {
+				return fmt.Errorf("rate limit / quota exceeded")
+			}
 			return nil
 		}
 		// Build error with stderr context

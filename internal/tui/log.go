@@ -97,7 +97,7 @@ func (l *LogViewer) AddEvent(event loop.Event) {
 		loop.EventToolStart, loop.EventToolResult,
 		loop.EventStoryStarted, loop.EventStoryCompleted,
 		loop.EventComplete, loop.EventError, loop.EventRetrying,
-		loop.EventWatchdogTimeout:
+		loop.EventWatchdogTimeout, loop.EventRateLimit:
 		// Always show these semantic events
 	case loop.EventStderr:
 		// Show error-bearing stderr lines even in non-verbose mode
@@ -386,7 +386,7 @@ func (l *LogViewer) LoadEntries(path string) error {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
 		var j logEntryJSON
 		if err := json.Unmarshal(scanner.Bytes(), &j); err != nil {
