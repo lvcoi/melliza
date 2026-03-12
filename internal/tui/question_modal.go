@@ -239,11 +239,12 @@ func (m *QuestionModal) listHeight() int {
 	return n * 2
 }
 
-// SetSize updates modal dimensions and rebuilds the list.
+// SetSize updates modal dimensions and resizes the list without rebuilding it,
+// so that the cursor position is preserved across renders.
 func (m *QuestionModal) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.list = m.buildList(m.currentQ)
+	m.list.SetSize(m.listWidth(), m.listHeight())
 	for i := range m.otherInputs {
 		m.otherInputs[i].SetWidth(m.listWidth() - 2)
 	}

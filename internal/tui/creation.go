@@ -165,6 +165,10 @@ func (c *PRDCreationChat) SetSize(width, height int) {
 	c.input.SetWidth(vpWidth - 6)
 	c.input.SetHeight(3)
 
+	if c.questionModal != nil {
+		c.questionModal.SetSize(width, height)
+	}
+
 	c.renderViewport()
 }
 
@@ -560,7 +564,6 @@ func (c *PRDCreationChat) View() tea.View {
 
 	// Overlay the question modal if active
 	if c.showingQuestionModal && c.questionModal != nil {
-		c.questionModal.SetSize(c.width, c.height)
 		return tea.NewView(c.questionModal.Render())
 	}
 

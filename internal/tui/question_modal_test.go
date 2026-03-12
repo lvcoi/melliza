@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 // ── Fix 4: ParseQuestions hardening tests ────────────────────────────────────
 
@@ -122,4 +126,86 @@ func TestParseQuestions_MalformedInput(t *testing.T) {
 	if questions != nil {
 		t.Error("expected nil for malformed input")
 	}
+}
+
+// ── Arrow key navigation tests ────────────────────────────────────────────────
+
+// testQuestionsText returns a standard two-question block for use in tests.
+func testQuestionsText() string {
+return `1. What framework should we use?
+   A. React
+   B. Vue
+   C. Angular
+
+2. What database do you prefer?
+   A. PostgreSQL
+   B. MySQL`
+}
+
+// TestQuestionModal_ArrowKeysNavigateList verifies that pressing "down" moves
+// the list cursor and that the cursor position is NOT reset on the next render
+// (i.e. SetSize does not rebuild the list and wipe out cursor state).
+func TestQuestionModal_ArrowKeysNavigateList(t *testing.T) {
+qs := ParseQuestions(testQuestionsText())
+if qs == nil {
+t.Fatal("test requires valid questions")
+}
+m := NewQuestionModal(qs)
+m.SetSize(80, 24)
+
+// Initial cursor should be at index 0
+if m.list.Index() != 0 {
+t.Fatalf("expected initial cursor at 0, got %d", m.list.Index())
+}
+
+// Press "down" — should move cursor to index 1
+downMsg := tea.KeyPressMsg{Code: tea.KeyDown}
+m, _ = m.Update(downMsg)
+if m.list.Index() != 1 {
+t.Fatalf("expected cursor at 1 after down key, got %d", m.list.Index())
+}
+
+// Simulate what View() used to do: call SetSize again (this was the bug)
+// The cursor must NOT be reset to 0 after SetSize.
+m.SetSize(80, 24)
+if m.list.Index() != 1 {
+t.Fatalf("cursor should stay at 1 after SetSize, got %d (SetSize must not rebuild the list)", m.list.Index())
+}
+
+// Press "up" — should move cursor back to index 0
+upMsg := tea.KeyPressMsg{Code: tea.KeyUp}
+m, _ = m.Update(upMsg)
+if m.list.Index() != 0 {
+t.Fatalf("expected cursor at 0 after up key, got %d", m.list.Index())
+}
+}
+
+// TestQuestionModal_SetSizeDoesNotResetCursor is a focused regression test
+// for the bug where SetSize rebuilt the list, losing the cursor position.
+func TestQuestionModal_SetSizeDoesNotResetCursor(t *testing.T) {
+qs := ParseQuestions(testQuestionsText())
+if qs == nil {
+t.Fatal("test requires valid questions")
+}
+m := NewQuestionModal(qs)
+m.SetSize(80, 24)
+
+// Move cursor down twice
+downMsg := tea.KeyPressMsg{Code: tea.KeyDown}
+m, _ = m.Update(downMsg)
+m, _ = m.Update(downMsg)
+
+wantIdx := m.list.Index()
+if wantIdx == 0 {
+t.Fatal("cursor did not move after two down key presses")
+}
+
+// Call SetSize multiple times (simulating repeated View() calls)
+for i := 0; i < 5; i++ {
+m.SetSize(80, 24)
+}
+
+if m.list.Index() != wantIdx {
+t.Errorf("cursor was reset by SetSize: want %d, got %d", wantIdx, m.list.Index())
+}
 }
