@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -94,7 +97,7 @@ func (l *LogViewer) AddEvent(event loop.Event) {
 		loop.EventToolStart, loop.EventToolResult,
 		loop.EventStoryStarted, loop.EventStoryCompleted,
 		loop.EventComplete, loop.EventError, loop.EventRetrying,
-		loop.EventWatchdogTimeout:
+		loop.EventWatchdogTimeout, loop.EventRateLimit:
 		// Always show these semantic events
 	case loop.EventStderr:
 		// Show error-bearing stderr lines even in non-verbose mode
@@ -311,6 +314,14 @@ func (l *LogViewer) IsAutoScrolling() bool {
 	return l.autoScroll
 }
 
+// LastEntry returns the last log entry, or false if empty.
+func (l *LogViewer) LastEntry() (LogEntry, bool) {
+	if len(l.entries) == 0 {
+		return LogEntry{}, false
+	}
+	return l.entries[len(l.entries)-1], true
+}
+
 // Clear clears all log entries.
 func (l *LogViewer) Clear() {
 	l.entries = make([]LogEntry, 0)
@@ -320,6 +331,100 @@ func (l *LogViewer) Clear() {
 	l.contentDirty = false
 	l.vp.SetContent("")
 	l.vp.GotoTop()
+}
+
+// logEntryJSON is the on-disk serialisation format for a LogEntry.
+// Only raw fields are persisted; derived/cached fields are recomputed on load.
+type logEntryJSON struct {
+	Type      loop.EventType         `json:"type"`
+	Iteration int                    `json:"iteration"`
+	Text      string                 `json:"text,omitempty"`
+	Tool      string                 `json:"tool,omitempty"`
+	ToolInput map[string]interface{} `json:"toolInput,omitempty"`
+	StoryID   string                 `json:"storyID,omitempty"`
+	FilePath  string                 `json:"filePath,omitempty"`
+}
+
+// SaveEntries writes all current log entries to a JSONL file at path.
+// Existing file contents are replaced.
+func (l *LogViewer) SaveEntries(path string) error {
+	if len(l.entries) == 0 {
+		return nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, e := range l.entries {
+		if err := enc.Encode(logEntryJSON{
+			Type:      e.Type,
+			Iteration: e.Iteration,
+			Text:      e.Text,
+			Tool:      e.Tool,
+			ToolInput: e.ToolInput,
+			StoryID:   e.StoryID,
+			FilePath:  e.FilePath,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LoadEntries reads JSONL log entries from path and replays them into the viewer.
+// Call Clear() first if you want a clean slate.
+func (l *LogViewer) LoadEntries(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // no prior log; nothing to do
+		}
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var j logEntryJSON
+		if err := json.Unmarshal(scanner.Bytes(), &j); err != nil {
+			continue // skip malformed lines
+		}
+		l.AddEvent(loop.Event{
+			Type:      j.Type,
+			Iteration: j.Iteration,
+			Text:      j.Text,
+			Tool:      j.Tool,
+			ToolInput: j.ToolInput,
+			StoryID:   j.StoryID,
+		})
+		// Restore the file path for the last-read tracking used by syntax highlighting
+		if j.FilePath != "" && len(l.entries) > 0 {
+			l.entries[len(l.entries)-1].FilePath = j.FilePath
+		}
+	}
+	return scanner.Err()
+}
+
+// AppendEntry appends a single log entry to a JSONL file at path (append-only).
+// This is called after each new event so the file stays up to date without a full rewrite.
+func (l *LogViewer) AppendEntry(path string, e LogEntry) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return json.NewEncoder(f).Encode(logEntryJSON{
+		Type:      e.Type,
+		Iteration: e.Iteration,
+		Text:      e.Text,
+		Tool:      e.Tool,
+		ToolInput: e.ToolInput,
+		StoryID:   e.StoryID,
+		FilePath:  e.FilePath,
+	})
 }
 
 // flushContent syncs the content buffer to the viewport if dirty.

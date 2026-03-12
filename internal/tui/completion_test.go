@@ -300,7 +300,7 @@ func TestCompletionScreen_PushErrorNonBlocking(t *testing.T) {
 
 func TestCenterModal(t *testing.T) {
 	modal := "test modal content"
-	result := centerModal(modal, 80, 40)
+	result := CenterModal(modal, 80, 40)
 
 	// Should have top padding and left padding
 	lines := strings.Split(result, "\n")

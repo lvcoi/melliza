@@ -240,41 +240,5 @@ func (w *WorktreeSpinner) Render() string {
 
 	modal := modalStyle.Render(content.String())
 
-	return w.centerModal(modal)
-}
-
-// centerModal centers the modal on the screen.
-func (w *WorktreeSpinner) centerModal(modal string) string {
-	lines := strings.Split(modal, "\n")
-	modalHeight := len(lines)
-	modalWidth := 0
-	for _, line := range lines {
-		if lipgloss.Width(line) > modalWidth {
-			modalWidth = lipgloss.Width(line)
-		}
-	}
-
-	topPadding := (w.height - modalHeight) / 2
-	leftPadding := (w.width - modalWidth) / 2
-
-	if topPadding < 0 {
-		topPadding = 0
-	}
-	if leftPadding < 0 {
-		leftPadding = 0
-	}
-
-	var result strings.Builder
-	for i := 0; i < topPadding; i++ {
-		result.WriteString("\n")
-	}
-
-	leftPad := strings.Repeat(" ", leftPadding)
-	for _, line := range lines {
-		result.WriteString(leftPad)
-		result.WriteString(line)
-		result.WriteString("\n")
-	}
-
-	return result.String()
+	return CenterModal(modal, w.width, w.height)
 }

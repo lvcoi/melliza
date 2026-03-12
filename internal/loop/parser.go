@@ -2,6 +2,7 @@ package loop
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -37,6 +38,9 @@ const (
 	EventStdout
 	// EventStderr is emitted for raw stderr lines.
 	EventStderr
+	// EventRateLimit is emitted when Gemini hits a rate-limit / quota error in stderr.
+	// The loop stops automatically; the TUI should offer the user options.
+	EventRateLimit
 )
 
 // String returns the string representation of an EventType.
@@ -68,6 +72,8 @@ func (e EventType) String() string {
 		return "Stdout"
 	case EventStderr:
 		return "Stderr"
+	case EventRateLimit:
+		return "RateLimit"
 	default:
 		return "Unknown"
 	}
@@ -146,9 +152,7 @@ func ParseLine(line string) *Event {
 		return parseUserMessage(msg.Message)
 
 	case "result":
-		// Result messages indicate the end of an iteration
-		// We don't emit a specific event for this, but could in the future
-		return nil
+		return parseResultMessage(line)
 
 	default:
 		return nil
@@ -225,6 +229,29 @@ func parseUserMessage(raw json.RawMessage) *Event {
 		}
 	}
 
+	return nil
+}
+
+// parseResultMessage parses a result event. Gemini emits these at the end of a
+// turn — when status is "error" we surface the API error message.
+func parseResultMessage(line string) *Event {
+	var raw struct {
+		Status string `json:"status"`
+		Error  struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return nil
+	}
+	if raw.Status == "error" && raw.Error.Message != "" {
+		return &Event{
+			Type: EventError,
+			Text: raw.Error.Message,
+			Err:  fmt.Errorf("Gemini API error: %s", raw.Error.Message),
+		}
+	}
 	return nil
 }
 

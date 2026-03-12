@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbles/v2/viewport"
 	"github.com/lvcoi/melliza/embed"
 	"github.com/lvcoi/melliza/internal/config"
 	"github.com/lvcoi/melliza/internal/git"
@@ -163,6 +164,7 @@ const (
 	ViewSettings
 	ViewQuitConfirm
 	ViewPRDCreationChat
+	ViewErrorModal
 )
 
 // App is the main Bubble Tea model for the Melliza TUI.
@@ -175,7 +177,8 @@ type App struct {
 	startTime     time.Time
 	selectedIndex       int
 	storiesScrollOffset int
-	detailsScrollOffset int
+	detailsVP           viewport.Model
+	detailsVPContent    string // cached to avoid SetContent scroll-reset in View()
 	width              int
 	height             int
 	err           error
@@ -234,6 +237,10 @@ type App struct {
 
 	// Quit confirmation dialog
 	quitConfirm *QuitConfirmation
+
+	// Error modal (shown after 3 consecutive failures without progress)
+	errorModal       *ErrorModal
+	consecutiveErrors map[string]int // per PRD name
 
 	// PRD creation chat
 	creationChat *PRDCreationChat
@@ -322,6 +329,10 @@ func NewAppWithOptions(prdPath string, maxIter int) (*App, error) {
 	// Create picker with manager reference (for creating new PRDs)
 	picker := NewPRDPicker(baseDir, prdName, manager)
 
+	detailsVP := viewport.New()
+	detailsVP.MouseWheelEnabled = false
+	detailsVP.KeyMap = viewport.KeyMap{}
+
 	return &App{
 		prd:           p,
 		prdPath:       prdPath,
@@ -330,6 +341,7 @@ func NewAppWithOptions(prdPath string, maxIter int) (*App, error) {
 		iteration:     0,
 		selectedIndex: 0,
 		maxIter:       maxIter,
+		detailsVP:     detailsVP,
 		manager:       manager,
 		watcher:         watcher,
 		progressWatcher: progressWatcher,
@@ -345,8 +357,10 @@ func NewAppWithOptions(prdPath string, maxIter int) (*App, error) {
 		branchWarning:    NewBranchWarning(),
 		worktreeSpinner:  NewWorktreeSpinner(),
 		completionScreen: NewCompletionScreen(),
-		settingsOverlay:  NewSettingsOverlay(),
-		quitConfirm:     NewQuitConfirmation(),
+		settingsOverlay:   NewSettingsOverlay(),
+		quitConfirm:      NewQuitConfirmation(),
+		errorModal:       NewErrorModal(),
+		consecutiveErrors: make(map[string]int),
 	}, nil
 }
 
@@ -682,6 +696,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.handleQuitConfirmKeys(msg)
 		}
 
+		// Handle error modal
+		if a.viewMode == ViewErrorModal {
+			return a.handleErrorModalKeys(msg)
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return a.tryQuit()
@@ -781,7 +800,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				if a.prd != nil && a.selectedIndex > 0 {
 					a.selectedIndex--
-					a.detailsScrollOffset = 0
+					a.detailsVP.GotoTop()
 					if a.selectedIndex < a.storiesScrollOffset {
 						a.storiesScrollOffset = a.selectedIndex
 					}
@@ -795,7 +814,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				if a.prd != nil && a.selectedIndex < len(a.prd.UserStories)-1 {
 					a.selectedIndex++
-					a.detailsScrollOffset = 0
+					a.detailsVP.GotoTop()
 					a.adjustStoriesScroll()
 				}
 			}
@@ -807,7 +826,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if a.viewMode == ViewDiff {
 				a.diffViewer.PageDown()
 			} else if a.viewMode == ViewDashboard {
-				a.detailsScrollOffset += 5
+				a.detailsVP.HalfPageDown()
 			}
 		case "ctrl+u", "pgup":
 			if a.viewMode == ViewLog {
@@ -815,10 +834,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if a.viewMode == ViewDiff {
 				a.diffViewer.PageUp()
 			} else if a.viewMode == ViewDashboard {
-				a.detailsScrollOffset -= 5
-				if a.detailsScrollOffset < 0 {
-					a.detailsScrollOffset = 0
-				}
+				a.detailsVP.HalfPageUp()
 			}
 		case "g":
 			if a.viewMode == ViewLog {
@@ -1064,6 +1080,52 @@ func (a *App) renderQuitConfirmView() string {
 	return a.quitConfirm.Render()
 }
 
+// tuiLogPath returns the path for the TUI log JSONL file for a given PRD path.
+func tuiLogPath(prdPath string) string {
+	return filepath.Join(filepath.Dir(prdPath), "tui_log.jsonl")
+}
+
+// showErrorModal sets up and opens the error modal overlay.
+func (a *App) showErrorModal(errText string) {
+	a.previousViewMode = a.viewMode
+	a.errorModal.SetError(errText)
+	a.errorModal.SetSize(a.width, a.height)
+	a.viewMode = ViewErrorModal
+}
+
+// handleErrorModalKeys handles keyboard input for the error modal.
+func (a App) handleErrorModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	updated, cmd := a.errorModal.Update(msg)
+	a.errorModal = updated
+	if !a.errorModal.IsDone() {
+		return a, cmd
+	}
+
+	switch a.errorModal.Choice() {
+	case ErrorChoiceSaveQuit:
+		a.stopAllLoops()
+		a.stopWatcher()
+		return a, tea.Quit
+	case ErrorChoiceStopLoop:
+		if a.manager != nil {
+			_ = a.manager.Stop(a.prdName)
+		}
+		a.consecutiveErrors[a.prdName] = 0
+		a.viewMode = a.previousViewMode
+		return a, cmd
+	default: // ErrorChoiceContinue / Esc
+		a.consecutiveErrors[a.prdName] = 0
+		a.viewMode = a.previousViewMode
+		return a, cmd
+	}
+}
+
+// renderErrorModalView renders the error modal overlay.
+func (a *App) renderErrorModalView() string {
+	a.errorModal.SetSize(a.width, a.height)
+	return a.errorModal.Render()
+}
+
 // handleLoopEvent handles events from the manager.
 func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.Cmd) {
 	// Only update iteration and log if this is the currently viewed PRD
@@ -1071,8 +1133,13 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 
 	if isCurrentPRD {
 		a.iteration = event.Iteration
-		// Add event to log viewer
+		// Add event to log viewer and persist to disk
 		a.logViewer.AddEvent(event)
+		if entry, ok := a.logViewer.LastEntry(); ok {
+			if err := a.logViewer.AppendEntry(tuiLogPath(a.prdPath), entry); err != nil {
+				a.lastActivity = "Log write error: " + err.Error()
+			}
+		}
 	}
 
 	var autoActionCmd tea.Cmd
@@ -1109,6 +1176,8 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 			a.currentStoryStart = time.Now()
 		}
 	case loop.EventStoryCompleted:
+		// Progress was made — reset consecutive error counter for this PRD
+		a.consecutiveErrors[prdName] = 0
 		if isCurrentPRD {
 			label := "✓ " + event.StoryID + " complete"
 			if event.Text != "" {
@@ -1136,12 +1205,32 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 			a.state = StatePaused
 			a.lastActivity = "Max iterations reached"
 		}
+	case loop.EventRateLimit:
+		// Rate-limit detected — loop already stopped itself; bump the error counter
+		// and show the error modal immediately (rate limits always warrant a popup).
+		a.consecutiveErrors[prdName]++
+		if isCurrentPRD {
+			a.state = StateError
+			a.lastActivity = "⚠ Rate limit / quota exceeded"
+			a.showErrorModal(event.Text)
+		}
 	case loop.EventError:
+		a.consecutiveErrors[prdName]++
 		if isCurrentPRD {
 			a.state = StateError
 			a.err = event.Err
+			errMsg := ""
 			if event.Err != nil {
-				a.lastActivity = "Error: " + event.Err.Error()
+				errMsg = event.Err.Error()
+			} else if event.Text != "" {
+				errMsg = event.Text
+			} else {
+				errMsg = "Unknown error"
+			}
+			a.lastActivity = "Error: " + errMsg
+			// Show the modal on the 3rd consecutive failure (no story completed between)
+			if a.consecutiveErrors[prdName] >= 3 {
+				a.showErrorModal(errMsg)
 			}
 		}
 	case loop.EventRetrying:
@@ -1259,6 +1348,8 @@ func (a App) View() tea.View {
 		content = a.renderSettingsView()
 	case ViewQuitConfirm:
 		content = a.renderQuitConfirmView()
+	case ViewErrorModal:
+		content = a.renderErrorModalView()
 	case ViewPRDCreationChat:
 		content = a.renderCreationChatView()
 	default:
@@ -2426,12 +2517,18 @@ func (a App) switchToPRD(name, prdPath string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Persist the current PRD's log to disk before clearing (must use OLD prdPath)
+	if err := a.logViewer.SaveEntries(tuiLogPath(a.prdPath)); err != nil {
+		a.lastActivity = "Log save error: " + err.Error()
+	}
+
 	// Update app state
 	a.prd = newPRD
 	a.prdPath = prdPath
 	a.prdName = name
 	a.selectedIndex = 0
 	a.storiesScrollOffset = 0
+	a.detailsVP.GotoTop()
 	a.state = appState
 	a.iteration = iteration
 	a.err = loopErr
@@ -2451,6 +2548,17 @@ func (a App) switchToPRD(name, prdPath string) (tea.Model, tea.Cmd) {
 
 	// Clear log viewer and story timing (each PRD has its own log/timing)
 	a.logViewer.Clear()
+
+	// Restore any previously-saved log for the new PRD, then rewrite
+	// the file to match in-memory state (prevents duplicates from
+	// filtered events or append-after-load races).
+	if err := a.logViewer.LoadEntries(tuiLogPath(prdPath)); err != nil {
+		a.lastActivity = "Log load error: " + err.Error()
+	}
+	if err := a.logViewer.SaveEntries(tuiLogPath(prdPath)); err != nil {
+		a.lastActivity = "Log save error: " + err.Error()
+	}
+
 	a.storyTimings = nil
 	a.currentStoryID = ""
 	a.currentStoryStart = time.Time{}

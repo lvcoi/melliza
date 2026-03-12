@@ -628,6 +628,48 @@ func TestLoop_WatchdogReturnsError(t *testing.T) {
 	}
 }
 
+// ── Fix 3: Tighten 429 match ─────────────────────────────────────────────────
+
+func TestIsRateLimitLine(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected bool
+	}{
+		// True positives — should match
+		{"HTTP 429", "HTTP 429 Too Many Requests", true},
+		{"status 429", "Error: status 429", true},
+		{"code 429", "response code 429", true},
+		{"error 429", "error 429 from API", true},
+		{"429 too many", "429 Too Many Requests", true},
+		{"429 resource", "429 Resource Exhausted", true},
+		{"rate limit", "You have exceeded the rate limit", true},
+		{"ratelimit", "RateLimitError: too many requests", true},
+		{"quota", "Quota exceeded for project", true},
+		{"resource exhausted", "RESOURCE_EXHAUSTED: quota", true},
+		{"mixed case", "HTTP 429 too many requests", true},
+
+		// False positives — should NOT match
+		{"file path with 429", "Reading file_429.txt", false},
+		{"port 4290", "Server listening on port 4290", false},
+		{"memory address", "allocated at 0x429abc", false},
+		{"line number 429", "  429: func main() {", false},
+		{"year 1429", "Founded in 1429", false},
+		{"version 4.2.9", "Updated to version 4.2.9", false},
+		{"plain text", "Everything is working fine", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsRateLimitLine(tt.input)
+			if result != tt.expected {
+				t.Errorf("IsRateLimitLine(%q) = %v, want %v", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 // TestLoop_WatchdogWithWorkDir tests that watchdog works with NewLoopWithWorkDir too.
 func TestLoop_WatchdogWithWorkDir(t *testing.T) {
 	l := NewLoopWithWorkDir("/test/prd.json", "/work", "test", 5)

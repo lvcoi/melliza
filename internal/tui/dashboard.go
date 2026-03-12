@@ -547,52 +547,21 @@ func (a *App) renderDetailsPanel(width, height int) string {
 		}
 	}
 
-	// Apply scrolling: inner height is panel height minus border frame
+	// Feed content into the viewport (size: inner area minus panel border)
+	innerW := width - 4 // left+right border+padding
 	innerH := height - 2
 	if innerH < 1 {
 		innerH = 1
 	}
-	allLines := strings.Split(content.String(), "\n")
-	totalLines := len(allLines)
-
-	// Clamp scroll offset
-	maxScroll := totalLines - innerH
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	if a.detailsScrollOffset > maxScroll {
-		a.detailsScrollOffset = maxScroll
-	}
-	if a.detailsScrollOffset < 0 {
-		a.detailsScrollOffset = 0
+	a.detailsVP.SetWidth(innerW)
+	a.detailsVP.SetHeight(innerH)
+	rendered := content.String()
+	if rendered != a.detailsVPContent {
+		a.detailsVPContent = rendered
+		a.detailsVP.SetContent(rendered)
 	}
 
-	// Slice visible lines
-	start := a.detailsScrollOffset
-	end := start + innerH
-	if end > totalLines {
-		end = totalLines
-	}
-	visible := strings.Join(allLines[start:end], "\n")
-
-	// Show scroll indicator if content overflows
-	if totalLines > innerH {
-		pct := 0
-		if maxScroll > 0 {
-			pct = a.detailsScrollOffset * 100 / maxScroll
-		}
-		indicator := lipgloss.NewStyle().Foreground(MutedColor).Render(fmt.Sprintf(" ↕ %d%%", pct))
-		// Prepend scroll indicator to first visible line
-		visible = indicator + "\n" + visible
-		// Trim to innerH lines
-		vlines := strings.Split(visible, "\n")
-		if len(vlines) > innerH {
-			vlines = vlines[:innerH]
-		}
-		visible = strings.Join(vlines, "\n")
-	}
-
-	return panelStyle.Width(width).Height(height).Render(visible)
+	return panelStyle.Width(width).Height(height).Render(a.detailsVP.View())
 }
 
 // renderErrorPanel renders the error details panel when in error state.

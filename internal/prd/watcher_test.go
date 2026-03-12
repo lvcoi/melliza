@@ -102,6 +102,7 @@ func TestWatcherDetectsFileChange(t *testing.T) {
 	if err := os.WriteFile(prdPath, data, 0644); err != nil {
 		t.Fatalf("Failed to update test PRD: %v", err)
 	}
+	time.Sleep(50 * time.Millisecond) // Ensure file write completes before watcher processes it
 
 	// Wait for the event
 	select {

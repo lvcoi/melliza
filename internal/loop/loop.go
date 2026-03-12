@@ -52,9 +52,10 @@ type Loop struct {
 	events          chan Event
 	geminiCmd       *exec.Cmd
 	logFile         *os.File
-	mu              sync.Mutex
-	stopped         bool
-	paused          bool
+	mu                 sync.Mutex
+	stopped            bool
+	paused             bool
+	rateLimitStopped   bool
 	retryConfig     RetryConfig
 	lastOutputTime  time.Time
 	watchdogTimeout time.Duration
@@ -363,16 +364,26 @@ func (l *Loop) runIteration(ctx context.Context) error {
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stderrDone)
+		rateLimitSent := false
 		scanner := bufio.NewScanner(stderr)
 		scanner.Buffer(make([]byte, 256*1024), 256*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
 			l.logLine("[stderr] " + line)
-			// Emit stderr as events so TUI can show them
 			l.mu.Lock()
 			iter := l.iteration
 			l.mu.Unlock()
+			// Emit stderr event so TUI can show it
 			l.events <- Event{Type: EventStderr, Iteration: iter, Text: line}
+			// Detect rate-limit / quota errors; emit a dedicated event and stop the loop (once)
+			if !rateLimitSent && IsRateLimitLine(line) {
+				rateLimitSent = true
+				l.events <- Event{Type: EventRateLimit, Iteration: iter, Text: line}
+				l.mu.Lock()
+				l.rateLimitStopped = true
+				l.mu.Unlock()
+				l.Stop()
+			}
 			// Keep last 10 lines for error context
 			stderrMu.Lock()
 			stderrLines = append(stderrLines, line)
@@ -422,6 +433,12 @@ func (l *Loop) runIteration(ctx context.Context) error {
 			return fmt.Errorf("watchdog timeout: no output for %s", l.watchdogTimeout)
 		}
 		if stopped {
+			l.mu.Lock()
+			rl := l.rateLimitStopped
+			l.mu.Unlock()
+			if rl {
+				return fmt.Errorf("rate limit / quota exceeded")
+			}
 			return nil
 		}
 		// Build error with stderr context
@@ -435,6 +452,23 @@ func (l *Loop) runIteration(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// IsRateLimitLine returns true if a stderr line indicates a rate-limit or quota error.
+// It uses specific patterns to avoid false positives from file paths, ports, or memory addresses
+// that happen to contain "429".
+func IsRateLimitLine(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "ratelimit") ||
+		strings.Contains(lower, "quota") ||
+		strings.Contains(lower, "resource exhausted") ||
+		strings.Contains(lower, "http 429") ||
+		strings.Contains(lower, "status 429") ||
+		strings.Contains(lower, "code 429") ||
+		strings.Contains(lower, "error 429") ||
+		strings.Contains(lower, "429 too many") ||
+		strings.Contains(lower, "429 resource")
 }
 
 // IsErrorLine returns true if a stderr line contains error-relevant content.
