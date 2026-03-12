@@ -3,6 +3,7 @@ package prd
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -125,11 +126,18 @@ func (w *Watcher) processEvents() {
 }
 
 // handleFileChange loads the PRD and sends an event if it changed.
+// It retries once after a short delay to handle partial-write races where
+// fsnotify fires before the OS has flushed the complete file content.
 func (w *Watcher) handleFileChange() {
 	prd, err := LoadPRD(w.path)
 	if err != nil {
-		w.events <- WatcherEvent{Error: err}
-		return
+		// Retry once — fsnotify can fire mid-write before the file is fully flushed
+		time.Sleep(100 * time.Millisecond)
+		prd, err = LoadPRD(w.path)
+		if err != nil {
+			w.events <- WatcherEvent{Error: err}
+			return
+		}
 	}
 
 	// Check if any story status changed
