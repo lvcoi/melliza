@@ -12,6 +12,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	"github.com/lvcoi/melliza/embed"
 	"github.com/lvcoi/melliza/internal/config"
+	"github.com/lvcoi/melliza/internal/gemini"
 	"github.com/lvcoi/melliza/internal/git"
 	"github.com/lvcoi/melliza/internal/loop"
 	"github.com/lvcoi/melliza/internal/prd"
@@ -165,6 +166,7 @@ const (
 	ViewQuitConfirm
 	ViewPRDCreationChat
 	ViewErrorModal
+	ViewConsecaWarning
 )
 
 // App is the main Bubble Tea model for the Melliza TUI.
@@ -241,6 +243,9 @@ type App struct {
 	// Error modal (shown after 3 consecutive failures without progress)
 	errorModal       *ErrorModal
 	consecutiveErrors map[string]int // per PRD name
+
+	// Conseca warning (shown at startup if Gemini's Conseca safety checker is enabled)
+	consecaWarning *ConsecaWarning
 
 	// PRD creation chat
 	creationChat *PRDCreationChat
@@ -396,6 +401,12 @@ func (a *App) DisableRetry() {
 
 // Init initializes the App.
 func (a App) Init() tea.Cmd {
+	// Check for Conseca safety checker before anything else
+	if gemini.IsConsecaEnabled() {
+		a.consecaWarning = NewConsecaWarning()
+		a.viewMode = ViewConsecaWarning
+	}
+
 	// Start the file watcher
 	if a.watcher != nil {
 		if err := a.watcher.Start(); err != nil {
@@ -669,6 +680,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle picker view separately (it has its own input mode)
 		if a.viewMode == ViewPicker {
 			return a.handlePickerKeys(msg)
+		}
+
+		// Handle Conseca warning view
+		if a.viewMode == ViewConsecaWarning {
+			return a.handleConsecaWarningKeys(msg)
 		}
 
 		// Handle branch warning view
@@ -1338,6 +1354,8 @@ func (a App) View() tea.View {
 		content = a.renderPickerView()
 	case ViewHelp:
 		content = a.renderHelpView()
+	case ViewConsecaWarning:
+		content = a.renderConsecaWarningView()
 	case ViewBranchWarning:
 		content = a.renderBranchWarningView()
 	case ViewWorktreeSpinner:
@@ -1359,6 +1377,37 @@ func (a App) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+// renderConsecaWarningView renders the Conseca safety warning dialog.
+func (a *App) renderConsecaWarningView() string {
+	if a.consecaWarning == nil {
+		return ""
+	}
+	a.consecaWarning.SetSize(a.width, a.height)
+	return a.consecaWarning.Render()
+}
+
+// handleConsecaWarningKeys handles keyboard input for the Conseca warning dialog.
+func (a App) handleConsecaWarningKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		a.consecaWarning.MoveUp()
+	case "down", "j":
+		a.consecaWarning.MoveDown()
+	case "enter":
+		switch a.consecaWarning.GetSelectedOption() {
+		case ConsecaOptionContinue:
+			a.viewMode = ViewDashboard
+			a.consecaWarning = nil
+		case ConsecaOptionQuit:
+			return a, tea.Quit
+		}
+	case "esc":
+		a.viewMode = ViewDashboard
+		a.consecaWarning = nil
+	}
+	return a, nil
 }
 
 // renderCreationChatView renders the PRD creation chat view.
