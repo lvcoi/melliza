@@ -368,11 +368,21 @@ func (l *Loop) runIteration(ctx context.Context) error {
 		for scanner.Scan() {
 			line := scanner.Text()
 			l.logLine("[stderr] " + line)
-			// Emit stderr as events so TUI can show them
 			l.mu.Lock()
 			iter := l.iteration
 			l.mu.Unlock()
+			// Emit stderr event so TUI can show it
 			l.events <- Event{Type: EventStderr, Iteration: iter, Text: line}
+			// Detect rate-limit / quota errors; emit a dedicated event and stop the loop
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "rate limit") ||
+				strings.Contains(lower, "ratelimit") ||
+				strings.Contains(lower, "quota") ||
+				strings.Contains(lower, "429") ||
+				strings.Contains(lower, "resource exhausted") {
+				l.events <- Event{Type: EventRateLimit, Iteration: iter, Text: line}
+				l.Stop()
+			}
 			// Keep last 10 lines for error context
 			stderrMu.Lock()
 			stderrLines = append(stderrLines, line)

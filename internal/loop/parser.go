@@ -37,6 +37,9 @@ const (
 	EventStdout
 	// EventStderr is emitted for raw stderr lines.
 	EventStderr
+	// EventRateLimit is emitted when Gemini hits a rate-limit / quota error in stderr.
+	// The loop stops automatically; the TUI should offer the user options.
+	EventRateLimit
 )
 
 // String returns the string representation of an EventType.
@@ -68,6 +71,8 @@ func (e EventType) String() string {
 		return "Stdout"
 	case EventStderr:
 		return "Stderr"
+	case EventRateLimit:
+		return "RateLimit"
 	default:
 		return "Unknown"
 	}

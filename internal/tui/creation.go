@@ -97,6 +97,10 @@ type PRDCreationChat struct {
 	// Track if Gemini has saved the PRD
 	prdSaved bool
 
+	// Question modal — shown when Gemini responds with structured clarifying questions
+	questionModal        *QuestionModal
+	showingQuestionModal bool
+
 	// Waiting animation state
 	spinnerFrame   int
 	robotFrame     int
@@ -362,7 +366,7 @@ func (c *PRDCreationChat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				c.sessionID = msg.SessionID
 			}
 			c.messages = append(c.messages, Message{Role: RoleAssistant, Content: msg.Content})
-			
+
 			// Check if PRD was saved (heuristic: check if prd.md exists)
 			if strings.Contains(msg.Content, "prd.md") || strings.Contains(msg.Content, "saved") {
 				c.prdSaved = true
@@ -372,7 +376,16 @@ func (c *PRDCreationChat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.Contains(msg.Content, "/exit") || strings.Contains(msg.Content, "<melliza-complete/>") {
 				c.done = true
 			}
-			
+
+			// Detect structured clarifying questions and offer the modal
+			if !c.done && !c.showingQuestionModal {
+				if qs := ParseQuestions(msg.Content); len(qs) >= 2 {
+					c.questionModal = NewQuestionModal(qs)
+					c.questionModal.SetSize(c.width, c.height)
+					c.showingQuestionModal = true
+				}
+			}
+
 			c.renderViewport()
 			c.viewport.GotoBottom()
 		case "error":
@@ -384,6 +397,23 @@ func (c *PRDCreationChat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyPressMsg:
+		// Question modal intercepts all keys when active
+		if c.showingQuestionModal && c.questionModal != nil {
+			updated, modalCmd := c.questionModal.Update(msg)
+			c.questionModal = updated
+			if c.questionModal.IsDone() {
+				answer := c.questionModal.BuildAnswer()
+				c.showingQuestionModal = false
+				c.questionModal = nil
+				if answer != "" {
+					// Inject the answer as a user message and send to Gemini
+					c.input.SetValue(answer)
+					return c, c.SendMessage()
+				}
+			}
+			return c, modalCmd
+		}
+
 		// Viewport scrolling — always available
 		switch msg.String() {
 		case "pgup", "ctrl+u":
@@ -526,5 +556,13 @@ func (c *PRDCreationChat) View() tea.View {
 	}
 	b.WriteString(lipgloss.NewStyle().Foreground(MutedColor).Padding(0, 1).Render(shortcuts))
 
-	return tea.NewView(lipgloss.NewStyle().Padding(1, 2).Render(b.String()))
+	base := lipgloss.NewStyle().Padding(1, 2).Render(b.String())
+
+	// Overlay the question modal if active
+	if c.showingQuestionModal && c.questionModal != nil {
+		c.questionModal.SetSize(c.width, c.height)
+		return tea.NewView(c.questionModal.Render())
+	}
+
+	return tea.NewView(base)
 }
