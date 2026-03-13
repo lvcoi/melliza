@@ -38,6 +38,7 @@ const (
 	StateStopped
 	StateComplete
 	StateError
+	StateSetup
 )
 
 func (s AppState) String() string {
@@ -54,6 +55,8 @@ func (s AppState) String() string {
 		return "Complete"
 	case StateError:
 		return "Error"
+	case StateSetup:
+		return "Setup"
 	default:
 		return "Unknown"
 	}
@@ -463,12 +466,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case ViewSettings:
 				a.settingsOverlay.MoveUp()
 			default:
-				if a.prd != nil && a.selectedIndex > 0 {
-					a.selectedIndex--
-					if a.selectedIndex < a.storiesScrollOffset {
-						a.storiesScrollOffset = a.selectedIndex
-					}
-				}
+				// Scroll the details viewport on mouse wheel
+				a.detailsVP.ScrollUp(3)
 			}
 		} else if msg.Button == tea.MouseWheelDown {
 			switch a.viewMode {
@@ -482,10 +481,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case ViewSettings:
 				a.settingsOverlay.MoveDown()
 			default:
-				if a.prd != nil && a.selectedIndex < len(a.prd.UserStories)-1 {
-					a.selectedIndex++
-					a.adjustStoriesScroll()
-				}
+				// Scroll the details viewport on mouse wheel
+				a.detailsVP.ScrollDown(3)
 			}
 		}
 		return a, nil
@@ -1240,6 +1237,18 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 	case loop.EventWatchdogTimeout:
 		if isCurrentPRD {
 			a.lastActivity = event.Text
+		}
+	case loop.EventReviewStart:
+		if isCurrentPRD {
+			a.lastActivity = "Reviewing changes..."
+		}
+	case loop.EventReviewPass:
+		if isCurrentPRD {
+			a.lastActivity = "✓ Review passed"
+		}
+	case loop.EventReviewFail:
+		if isCurrentPRD {
+			a.lastActivity = "✗ Review rejected: " + event.Text
 		}
 	case loop.EventStderr:
 		// Show meaningful stderr in activity bar (errors, API issues)

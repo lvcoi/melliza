@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	projectctx "github.com/lvcoi/melliza/internal/context"
 	"github.com/lvcoi/melliza/internal/config"
 	"github.com/lvcoi/melliza/internal/prd"
 )
@@ -221,15 +222,18 @@ func (m *Manager) Start(name string) error {
 		return fmt.Errorf("PRD %s is already running", name)
 	}
 
-	// Create a new loop instance, using worktree-aware constructor if WorktreeDir is set.
-	// When no worktree is configured, run from the project root (baseDir) so that
-	// GEMINI.md and other project-level files are visible to Gemini.
+	// Ensure GEMINI.md exists in the working directory for project context
 	workDir := instance.WorktreeDir
 	if workDir == "" {
 		m.mu.RLock()
 		workDir = m.baseDir
 		m.mu.RUnlock()
 	}
+	if workDir != "" {
+		_ = projectctx.EnsureGeminiContext(workDir) // best-effort, non-fatal
+	}
+
+	// Create a new loop instance with the resolved working directory.
 	instance.Loop = NewLoopWithWorkDir(instance.PRDPath, workDir, "", m.maxIter)
 	instance.Loop.buildPrompt = promptBuilderForPRD(instance.PRDPath)
 	m.mu.RLock()

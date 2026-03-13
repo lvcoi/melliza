@@ -41,6 +41,12 @@ const (
 	// EventRateLimit is emitted when Gemini hits a rate-limit / quota error in stderr.
 	// The loop stops automatically; the TUI should offer the user options.
 	EventRateLimit
+	// EventReviewStart is emitted when a review agent begins reviewing an iteration.
+	EventReviewStart
+	// EventReviewPass is emitted when the review agent accepts the iteration's changes.
+	EventReviewPass
+	// EventReviewFail is emitted when the review agent rejects the iteration's changes.
+	EventReviewFail
 )
 
 // String returns the string representation of an EventType.
@@ -74,6 +80,12 @@ func (e EventType) String() string {
 		return "Stderr"
 	case EventRateLimit:
 		return "RateLimit"
+	case EventReviewStart:
+		return "ReviewStart"
+	case EventReviewPass:
+		return "ReviewPass"
+	case EventReviewFail:
+		return "ReviewFail"
 	default:
 		return "Unknown"
 	}

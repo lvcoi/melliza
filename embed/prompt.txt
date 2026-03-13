@@ -25,7 +25,7 @@ Your current story:
 7. If checks pass, commit changes with message: `feat: {{STORY_ID}} - {{STORY_TITLE}}`
    - **NEVER stage or commit `.melliza/` files** — these are local working files and must stay out of version control
    - Stage only the files you changed for the story (do NOT use `git add -A` or `git add .`)
-8. Update the PRD at `{{PRD_PATH}}` to set `passes: true` for the completed story
+8. Do NOT modify prd.json — the orchestrator controls story completion status
 9. Append your progress to `{{PROGRESS_PATH}}`
 
 ## Progress Report Format
@@ -71,15 +71,6 @@ Only add patterns that are **general and reusable**, not story-specific details.
 - Do NOT commit broken code
 - Keep changes focused and minimal
 - Follow existing code patterns
-
-## Stop Condition
-
-After completing a user story, check if ALL stories have `passes: true`.
-
-If ALL stories are complete and passing, reply with:
-<melliza-complete/>
-
-If there are still stories with `passes: false`, end your response normally (another iteration will pick up the next story).
 
 ## Important
 

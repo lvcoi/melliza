@@ -290,6 +290,25 @@ func TestParseLineMultipleContentBlocks(t *testing.T) {
 	}
 }
 
+func TestEventTypeString_ReviewEvents(t *testing.T) {
+	tests := []struct {
+		eventType EventType
+		expected  string
+	}{
+		{EventReviewStart, "ReviewStart"},
+		{EventReviewPass, "ReviewPass"},
+		{EventReviewFail, "ReviewFail"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			if got := tt.eventType.String(); got != tt.expected {
+				t.Errorf("EventType.String() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestParseLineToolUseFirst(t *testing.T) {
 	// When tool_use comes first
 	line := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/test"}},{"type":"text","text":"Second"}]}}`

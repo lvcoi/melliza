@@ -59,6 +59,9 @@ type Loop struct {
 	retryConfig     RetryConfig
 	lastOutputTime  time.Time
 	watchdogTimeout time.Duration
+	currentStoryID       string     // Story ID captured from EventStoryStarted
+	reviewFunc           ReviewFunc // Optional review gate (nil = auto-accept)
+	lastRejectionReasons []string   // Reasons from the last review rejection
 }
 
 // NewLoop creates a new Loop instance.
@@ -204,6 +207,15 @@ func (l *Loop) Run(ctx context.Context) error {
 				Err:  err,
 			}
 			return err
+		}
+
+		// After a successful iteration, mark the current story as passed
+		if err := l.finalizeIteration(); err != nil {
+			l.events <- Event{
+				Type: EventError,
+				Err:  fmt.Errorf("failed to finalize iteration: %w", err),
+			}
+			// Non-fatal: log but continue
 		}
 
 		// Check context cancellation
@@ -411,6 +423,10 @@ func (l *Loop) runIteration(ctx context.Context) error {
 		if event != nil {
 			l.mu.Lock()
 			event.Iteration = l.iteration
+			// Capture story ID from EventStoryStarted
+			if event.Type == EventStoryStarted && event.StoryID != "" {
+				l.currentStoryID = event.StoryID
+			}
 			l.mu.Unlock()
 			l.events <- *event
 		}
@@ -581,6 +597,14 @@ func (l *Loop) processOutput(r io.Reader) {
 		// Parse the line and emit event if valid
 		if event := ParseLine(line); event != nil {
 			event.Iteration = iter
+
+			// Capture story ID from EventStoryStarted
+			if event.Type == EventStoryStarted && event.StoryID != "" {
+				l.mu.Lock()
+				l.currentStoryID = event.StoryID
+				l.mu.Unlock()
+			}
+
 			l.events <- *event
 		} else {
 			// If not parsed as a semantic event, emit as raw stdout event
@@ -717,4 +741,86 @@ func (l *Loop) WatchdogTimeout() time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.watchdogTimeout
+}
+
+// CurrentStoryID returns the story ID that the agent is currently working on,
+// as captured from EventStoryStarted events.
+func (l *Loop) CurrentStoryID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.currentStoryID
+}
+
+// markStoryPassed loads the PRD, sets passes: true for the given story, and saves it.
+// Returns an error if the story ID is not found.
+func markStoryPassed(prdPath, storyID string) error {
+	p, err := prd.LoadPRD(prdPath)
+	if err != nil {
+		return fmt.Errorf("failed to load PRD for marking: %w", err)
+	}
+
+	found := false
+	for i := range p.UserStories {
+		if p.UserStories[i].ID == storyID {
+			p.UserStories[i].Passes = true
+			p.UserStories[i].InProgress = false
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("story %s not found in PRD", storyID)
+	}
+
+	return p.Save(prdPath)
+}
+
+// LastRejectionReasons returns the rejection reasons from the most recent review failure.
+func (l *Loop) LastRejectionReasons() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lastRejectionReasons
+}
+
+// SetReviewFunc sets the review gate function. When set, finalizeIteration will
+// call it before marking a story as passed. A failing review prevents marking.
+func (l *Loop) SetReviewFunc(fn ReviewFunc) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.reviewFunc = fn
+}
+
+// finalizeIteration marks the current story as passed after a successful iteration.
+// If a reviewFunc is set, it is called first — a failing review prevents marking.
+// If no story ID was captured (e.g. agent didn't emit a ralph-status tag), this is a no-op.
+func (l *Loop) finalizeIteration() error {
+	l.mu.Lock()
+	storyID := l.currentStoryID
+	reviewFn := l.reviewFunc
+	l.mu.Unlock()
+
+	if storyID == "" {
+		return nil
+	}
+
+	// Run review if configured
+	if reviewFn != nil {
+		verdict, err := reviewFn(l.prdPath, storyID)
+		if err != nil {
+			return fmt.Errorf("review failed: %w", err)
+		}
+		if !verdict.Pass {
+			l.mu.Lock()
+			l.lastRejectionReasons = verdict.Reasons
+			l.mu.Unlock()
+			return nil // Don't mark as passed
+		}
+	}
+
+	l.mu.Lock()
+	l.lastRejectionReasons = nil
+	l.mu.Unlock()
+
+	return markStoryPassed(l.prdPath, storyID)
 }
