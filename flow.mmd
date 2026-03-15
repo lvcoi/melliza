@@ -1,0 +1,99 @@
+# Mermaid Diagram of Melliza Workflow
+
+```mermaid
+  flowchart TD
+      subgraph TUI["TUI (app.go)"]
+          A["User presses Play"] --> B["manager.Start(prdName)"]
+          L["listenForManagerEvents()"] --> M["LoopEventMsg → Update()"]
+          M --> N["handleLoopEvent()"]
+          N -->|EventIterationStart| O["Activity: Starting iteration..."]
+          N -->|EventStoryStarted| P["Track story timing"]
+          N -->|EventStoryCompleted| Q["✓ Story complete"]
+          N -->|EventReviewStart| R1["Activity: Reviewing..."]
+          N -->|EventReviewPass| R2["Activity: ✓ Review passed"]
+          N -->|EventReviewFail| R3["Activity: ✗ Review rejected"]
+          N -->|EventComplete| S["StateComplete → showCompletionScreen"]
+          N -->|EventRateLimit| T["StateError → showErrorModal"]
+          N -->|EventError| U["Bump error counter"]
+      end
+
+      subgraph Manager["Manager (manager.go)"]
+          B --> CTX["EnsureGeminiContext(workDir)"]
+          CTX --> CTX1["DetectTechStack()"]
+          CTX1 --> CTX2["GenerateGeminiMD() if missing"]
+          CTX2 --> C["NewLoopWithWorkDir()"]
+          C --> D["buildPrompt = promptBuilderForPRD()"]
+          D --> E["go runLoop(instance)"]
+          E --> F["Forward events: Loop → ManagerEvent"]
+          F --> L
+          E --> G["instance.Loop.Run(ctx)"]
+      end
+
+      subgraph Loop["Loop.Run() (loop.go)"]
+          G --> H{"Stopped or\npaused?"}
+          H -->|Yes| DONE["return nil"]
+          H -->|No| I["iteration++"]
+          I --> J{"iteration >\nmaxIter?"}
+          J -->|Yes| MAXEV["emit EventMaxIterationsReached"]
+          J -->|No| K["Snapshot passing stories"]
+          K --> BP["buildPrompt() → load PRD\n→ NextStory() → embed.GetPrompt()"]
+          BP --> ITER["emit EventIterationStart"]
+          ITER --> RR["runIterationWithRetry(ctx)"]
+
+          RR --> RI["runIteration(ctx)"]
+          RI --> FAIL{"Error?"}
+          FAIL -->|Yes, retryable| RETRY["emit EventRetrying\nwait delay\nretry"]
+          RETRY --> RI
+          FAIL -->|Yes, exhausted| ERREV["emit EventError → return err"]
+          FAIL -->|No| FIN["finalizeIteration()"]
+
+          FIN --> FIN1{"currentStoryID\nset?"}
+          FIN1 -->|No| SKIP["no-op"]
+          FIN1 -->|Yes| FIN2{"reviewFunc\nset?"}
+          FIN2 -->|No| MARK["markStoryPassed()\nload PRD → set passes:true → save"]
+          FIN2 -->|Yes| REV["reviewFunc(prdPath, storyID)"]
+          REV --> REV1{"verdict.Pass?"}
+          REV1 -->|Yes| MARK
+          REV1 -->|No| REJECT["Store lastRejectionReasons\nDo NOT mark passed"]
+
+          MARK --> CK["Load PRD → detect newly passing stories"]
+          SKIP --> CK
+          REJECT --> CK
+          CK --> CK1["emit EventStoryCompleted\nfor each new pass"]
+          CK1 --> CK2{"AllComplete()?"}
+          CK2 -->|Yes| COMP["emit EventComplete → return nil"]
+          CK2 -->|No| H
+      end
+
+      subgraph Iteration["runIteration() — Gemini Subprocess"]
+          RI --> GEM["exec: gemini --stream-json"]
+          GEM --> WD["Start watchdog goroutine"]
+          GEM --> SE["Drain stderr goroutine"]
+          GEM --> SO["Scan stdout lines"]
+
+          SO --> PL["ParseLine(line)"]
+          PL -->|system init| EV1["EventIterationStart"]
+          PL -->|assistant text| EV2["EventAssistantText"]
+          PL -->|ralph-status tag| EV3["EventStoryStarted\n→ capture currentStoryID"]
+          PL -->|tool_use| EV4["EventToolStart"]
+          PL -->|tool_result| EV5["EventToolResult"]
+          PL -->|melliza-complete| EV6["EventComplete (legacy)"]
+          PL -->|result error| EV7["EventError"]
+
+          SE -->|rate limit detected| RL["EventRateLimit → Stop()"]
+          WD -->|no output for 5min| WDEV["EventWatchdogTimeout → Kill()"]
+      end
+
+      subgraph Prompt["Prompt Construction"]
+          BP --> PT["embed/prompt.txt"]
+          PT --> PT1["Story context inlined"]
+          PT1 --> PT2["Progress path for learnings"]
+          PT2 --> PT3["'Do NOT modify prd.json'"]
+      end
+
+      style TUI fill:#1a1a2e,stroke:#e94560,color:#eee
+      style Manager fill:#16213e,stroke:#0f3460,color:#eee
+      style Loop fill:#0f3460,stroke:#533483,color:#eee
+      style Iteration fill:#533483,stroke:#e94560,color:#eee
+      style Prompt fill:#2a2a3e,stroke:#888,color:#ccc
+```

@@ -22,6 +22,12 @@ var convertPromptTemplate string
 //go:embed detect_setup_prompt.txt
 var detectSetupPromptTemplate string
 
+//go:embed review_prompt.txt
+var reviewPromptTemplate string
+
+//go:embed gemini_md.txt
+var geminiMDTemplate string
+
 // GetPrompt returns the agent prompt with the PRD path, progress path, and
 // current story context substituted. The storyContext is the JSON of the
 // current story to work on, inlined directly into the prompt so that the
@@ -59,4 +65,17 @@ func GetConvertPrompt(prdFilePath, idPrefix string) string {
 // GetDetectSetupPrompt returns the prompt for detecting project setup commands.
 func GetDetectSetupPrompt() string {
 	return detectSetupPromptTemplate
+}
+
+// GetGeminiMDTemplate returns the GEMINI.md template with the tech stack substituted.
+func GetGeminiMDTemplate(techStack string) string {
+	return strings.ReplaceAll(geminiMDTemplate, "{{TECH_STACK}}", techStack)
+}
+
+// GetReviewPrompt returns the review agent prompt with the diff, acceptance criteria,
+// and story title substituted.
+func GetReviewPrompt(diff, criteria, storyTitle string) string {
+	result := strings.ReplaceAll(reviewPromptTemplate, "{{DIFF}}", diff)
+	result = strings.ReplaceAll(result, "{{ACCEPTANCE_CRITERIA}}", criteria)
+	return strings.ReplaceAll(result, "{{STORY_TITLE}}", storyTitle)
 }

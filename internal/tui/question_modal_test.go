@@ -128,6 +128,84 @@ func TestParseQuestions_MalformedInput(t *testing.T) {
 	}
 }
 
+func TestParseQuestions_MarkdownBoldNumbering(t *testing.T) {
+	text := `**1. What framework should we use?**
+   A. React
+   B. Vue
+   C. Angular
+
+**2. What database do you prefer?**
+   A. PostgreSQL
+   B. MySQL
+   C. SQLite`
+
+	questions := ParseQuestions(text)
+	if questions == nil {
+		t.Fatal("expected questions to be parsed from markdown-bold numbered items")
+	}
+	if len(questions) != 2 {
+		t.Fatalf("expected 2 questions, got %d", len(questions))
+	}
+	// Verify bold markers are stripped from question text
+	if questions[0].Text != "What framework should we use?" {
+		t.Errorf("unexpected q1 text: %q", questions[0].Text)
+	}
+}
+
+func TestParseQuestions_ProseQuestionsBeforeNumbered(t *testing.T) {
+	// Gemini often writes prose questions before the numbered Q&A block.
+	// Only the numbered questions with lettered options should be detected.
+	text := `Great, I'd like to understand your needs better. What kind of app is this?
+Who is your target audience? What's your timeline?
+
+Here are my specific questions:
+
+1. What framework should we use?
+   A. React
+   B. Vue
+   C. Angular
+
+2. What database do you prefer?
+   A. PostgreSQL
+   B. MySQL
+
+3. How should authentication work?
+   A. JWT tokens
+   B. OAuth
+   C. Session-based`
+
+	questions := ParseQuestions(text)
+	if questions == nil {
+		t.Fatal("expected questions to be parsed (prose before numbered should not interfere)")
+	}
+	if len(questions) != 3 {
+		t.Fatalf("expected 3 questions, got %d", len(questions))
+	}
+}
+
+func TestParseQuestions_MarkdownBoldOptions(t *testing.T) {
+	text := `1. What approach should we take?
+   **A.** Microservices
+   **B.** Monolith
+   **C.** Serverless
+
+2. What language do you prefer?
+   **A.** Go
+   **B.** Rust
+   **C.** TypeScript`
+
+	questions := ParseQuestions(text)
+	if questions == nil {
+		t.Fatal("expected questions with markdown-bold options to be parsed")
+	}
+	if len(questions) != 2 {
+		t.Fatalf("expected 2 questions, got %d", len(questions))
+	}
+	if len(questions[0].Options) != 3 {
+		t.Errorf("expected 3 options for q1, got %d", len(questions[0].Options))
+	}
+}
+
 // ── Arrow key navigation tests ────────────────────────────────────────────────
 
 // testQuestionsText returns a standard two-question block for use in tests.

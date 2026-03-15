@@ -33,11 +33,12 @@ func (o questionOption) FilterValue() string { return o.letter }
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
-// numberedQ matches lines like "1." / "1)" at the start of a line.
-var reQuestion = regexp.MustCompile(`(?m)^\s*\d+[.)]\s+(.+)`)
+// numberedQ matches lines like "1." / "1)" at the start of a line,
+// including when wrapped in markdown bold (e.g. "**1. Question?**").
+var reQuestion = regexp.MustCompile(`(?m)^\s*\*{0,2}\s*\d+[.)]\s*\*{0,2}\s+(.+)`)
 
-// letteredOpt matches lines like "A." / "a)" / "- A." at the start of a line.
-var reOption = regexp.MustCompile(`(?m)^\s*[-*]?\s*([A-Ea-e])[.)]\s+(.+)`)
+// letteredOpt matches lines like "A." / "a)" / "- A." / "**A.**" at the start of a line.
+var reOption = regexp.MustCompile(`(?m)^\s*[-*]*\s*([A-Ea-e])[.)]\s*\*{0,2}\s+(.+)`)
 
 // ParseQuestions attempts to extract structured Q&A from Gemini's markdown text.
 // Returns nil if fewer than 2 questions are found (don't trigger the modal for
@@ -60,10 +61,12 @@ func ParseQuestions(text string) []ParsedQuestion {
 		}
 		block := text[loc[0]:end]
 
-		// Extract question text (first line of block, stripped of numbering).
+		// Extract question text (first line of block, stripped of numbering and markdown bold).
 		// TrimSpace the block first because the regex match may include a leading \n.
 		firstLine := strings.TrimSpace(strings.SplitN(strings.TrimSpace(block), "\n", 2)[0])
-		firstLine = regexp.MustCompile(`^\d+[.)]\s*`).ReplaceAllString(firstLine, "")
+		firstLine = regexp.MustCompile(`^\*{0,2}\s*\d+[.)]\s*\*{0,2}\s*`).ReplaceAllString(firstLine, "")
+		firstLine = strings.TrimRight(strings.TrimSpace(firstLine), "*")
+		firstLine = strings.TrimSpace(firstLine)
 
 		// Require the question text to contain a question mark — this filters
 		// out numbered implementation steps with lettered sub-items.
@@ -84,9 +87,8 @@ func ParseQuestions(text string) []ParsedQuestion {
 			opts = append(opts, letter+". "+strings.TrimSpace(m[2]))
 		}
 
-		if len(opts) >= 2 || len(questions) > 0 {
-			// Allow a question with no options (free text) if we already have
-			// some structured questions.
+		if len(opts) >= 2 {
+			// Only include questions that have both a ? and lettered options.
 			questions = append(questions, ParsedQuestion{
 				Text:    firstLine,
 				Options: opts,

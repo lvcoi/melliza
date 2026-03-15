@@ -137,5 +137,5 @@ func (c *ConsecaWarning) Render() string {
 		Width(modalWidth)
 
 	modal := modalStyle.Render(content.String())
-	return centerModal(modal, c.width, c.height)
+	return CenterModal(modal, c.width, c.height)
 }

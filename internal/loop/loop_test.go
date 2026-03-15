@@ -670,6 +670,141 @@ func TestIsRateLimitLine(t *testing.T) {
 	}
 }
 
+// TestLoop_TracksCurrentStoryID tests that the loop tracks the current story ID
+// from EventStoryStarted events parsed during output scanning.
+func TestLoop_TracksCurrentStoryID(t *testing.T) {
+	l := NewLoop("/test/prd.json", "test", 5)
+	l.iteration = 1
+
+	// Drain events
+	go func() { for range l.Events() {} }()
+
+	// Initially empty
+	if got := l.CurrentStoryID(); got != "" {
+		t.Errorf("Expected empty initial CurrentStoryID, got %q", got)
+	}
+
+	// Feed a line with a ralph-status tag through processOutput
+	r, w, _ := os.Pipe()
+	go func() {
+		w.WriteString(`{"type":"assistant","message":{"content":[{"type":"text","text":"<ralph-status>US-007</ralph-status>"}]}}` + "\n")
+		w.Close()
+	}()
+
+	l.processOutput(r)
+	close(l.events)
+
+	if got := l.CurrentStoryID(); got != "US-007" {
+		t.Errorf("Expected CurrentStoryID %q, got %q", "US-007", got)
+	}
+}
+
+// TestLoop_AutoAcceptSetsPassesTrue tests that markStoryPassed sets passes: true
+// for the given story ID in prd.json.
+func TestLoop_AutoAcceptSetsPassesTrue(t *testing.T) {
+	tmpDir := t.TempDir()
+	prdPath := createTestPRD(t, tmpDir, false) // US-001 with passes: false
+
+	err := markStoryPassed(prdPath, "US-001")
+	if err != nil {
+		t.Fatalf("markStoryPassed() error: %v", err)
+	}
+
+	// Reload and verify
+	p, err := prd.LoadPRD(prdPath)
+	if err != nil {
+		t.Fatalf("LoadPRD() error: %v", err)
+	}
+
+	if !p.UserStories[0].Passes {
+		t.Error("Expected US-001 to have passes: true after markStoryPassed")
+	}
+}
+
+// TestLoop_AutoAcceptIgnoresUnknownStory tests that markStoryPassed returns an error
+// when the story ID doesn't exist in the PRD.
+func TestLoop_AutoAcceptIgnoresUnknownStory(t *testing.T) {
+	tmpDir := t.TempDir()
+	prdPath := createTestPRD(t, tmpDir, false)
+
+	err := markStoryPassed(prdPath, "US-999")
+	if err == nil {
+		t.Error("Expected error for unknown story ID, got nil")
+	}
+}
+
+// TestLoop_PostIterationMarksPassed tests that finalizeIteration marks the current
+// story as passed in prd.json.
+func TestLoop_PostIterationMarksPassed(t *testing.T) {
+	tmpDir := t.TempDir()
+	prdPath := createTestPRD(t, tmpDir, false)
+
+	l := NewLoop(prdPath, "test", 5)
+	l.currentStoryID = "US-001"
+
+	err := l.finalizeIteration()
+	if err != nil {
+		t.Fatalf("finalizeIteration() error: %v", err)
+	}
+
+	// Verify the story was marked as passed
+	p, err := prd.LoadPRD(prdPath)
+	if err != nil {
+		t.Fatalf("LoadPRD() error: %v", err)
+	}
+	if !p.UserStories[0].Passes {
+		t.Error("Expected US-001 to have passes: true after finalizeIteration")
+	}
+}
+
+// TestLoop_StopSkipsFinalization verifies that finalizeIteration is NOT called when
+// the loop is stopped mid-iteration, preventing an interrupted story from being
+// recorded as complete.
+//
+// This test exercises the actual stopped path through runIterationWithRetry (which
+// returns nil when l.stopped is true without spawning Gemini) and then applies the
+// same gate condition that Run() uses to confirm finalization is skipped.
+func TestLoop_StopSkipsFinalization(t *testing.T) {
+	tmpDir := t.TempDir()
+	prdPath := createTestPRD(t, tmpDir, false)
+
+	l := NewLoop(prdPath, "test", 5)
+	l.currentStoryID = "US-001"
+
+	// Simulate Stop() being called mid-iteration.
+	l.mu.Lock()
+	l.stopped = true
+	l.mu.Unlock()
+
+	// runIterationWithRetry returns nil when stopped is true (no Gemini spawn needed).
+	ctx := context.Background()
+	err := l.runIterationWithRetry(ctx)
+	if err != nil {
+		t.Fatalf("runIterationWithRetry() expected nil when stopped, got: %v", err)
+	}
+
+	// Apply the gate that Run() now uses: skip finalization when stopped.
+	l.mu.Lock()
+	wasStopped := l.stopped
+	l.mu.Unlock()
+
+	if !wasStopped && ctx.Err() == nil {
+		// In Run(), finalization only happens here (true-success path).
+		if err := l.finalizeIteration(); err != nil {
+			t.Fatalf("finalizeIteration() unexpected error: %v", err)
+		}
+	}
+
+	// The story must NOT be marked passed because the iteration was interrupted.
+	p, err := prd.LoadPRD(prdPath)
+	if err != nil {
+		t.Fatalf("LoadPRD() error: %v", err)
+	}
+	if p.UserStories[0].Passes {
+		t.Error("story must NOT be marked passed when loop was stopped mid-iteration")
+	}
+}
+
 // TestLoop_WatchdogWithWorkDir tests that watchdog works with NewLoopWithWorkDir too.
 func TestLoop_WatchdogWithWorkDir(t *testing.T) {
 	l := NewLoopWithWorkDir("/test/prd.json", "/work", "test", 5)

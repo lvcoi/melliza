@@ -83,3 +83,27 @@ The TUI is a single Bubble Tea `App` model (`internal/tui/app.go`) with tab-base
 - **Story completion**: Gemini sets `"passes": true` in `prd.json`. The loop detects this via file watching or parsing output.
 - **TUI golden tests**: `internal/tui/testdata/` holds golden output files for E2E tests. Update them with `-update` flag when intentionally changing TUI output.
 - **Worktrees**: When enabled, each PRD gets its own git worktree under `.melliza/worktrees/`. The loop runs Gemini in that directory.
+
+## Build & Validation
+
+Always run `go build ./...` after making Go changes to catch compile errors before claiming success. The PostToolUse hook runs this automatically on Edit/Write, but also run it manually before committing.
+
+Run `make test` (or `go test ./...`) before committing to catch regressions — especially for nil pointer panics, which are the most common failure mode in this codebase.
+
+## Debugging Guidelines
+
+When fixing bugs, verify the fix at **runtime**, not just build/test pass. Ask the user to confirm runtime behavior if you can't test it yourself. Never conclude "everything works" just because `go build` and `go test` succeed — reproduce the actual runtime scenario described.
+
+## Project Structure
+
+- Go backend lives in the repository root.
+- Key configuration and tooling lives in `.claude/` (skills, hooks, settings, insights). Check there first when asked about project config or recommendations.
+- Untracked `.go` files participate in compilation even if not committed — watch for orphan files that break builds on other branches.
+
+## Git Workflow
+
+Before committing, always verify you are on the correct branch:
+```bash
+git branch --show-current
+```
+Committing to the wrong branch (e.g., `dev` instead of a PR branch) has caused issues. Double-check before every commit, especially after rebases or cherry-picks.

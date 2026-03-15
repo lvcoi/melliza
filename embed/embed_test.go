@@ -33,9 +33,9 @@ func TestGetPrompt(t *testing.T) {
 		t.Error("Expected prompt to contain exact commit message 'feat: US-001 - Test Story'")
 	}
 
-	// Verify the PRD path appears in the prompt
-	if !strings.Contains(prompt, prdPath) {
-		t.Errorf("Expected prompt to contain PRD path %q", prdPath)
+	// PRD path should NOT appear — agent must not modify prd.json
+	if strings.Contains(prompt, prdPath) {
+		t.Errorf("Expected prompt to NOT contain PRD path %q — agent must not touch prd.json", prdPath)
 	}
 
 	// Verify the progress path appears in the prompt
@@ -48,17 +48,37 @@ func TestGetPrompt(t *testing.T) {
 		t.Error("Expected prompt to contain inlined story context")
 	}
 
-	// Verify the prompt contains key instructions
-	if !strings.Contains(prompt, "melliza-complete") {
-		t.Error("Expected prompt to contain melliza-complete instruction")
+	// Verify the prompt no longer contains self-certification instructions
+	if strings.Contains(prompt, "melliza-complete") {
+		t.Error("Expected prompt to NOT contain melliza-complete — loop controls completion")
 	}
 
 	if !strings.Contains(prompt, "ralph-status") {
 		t.Error("Expected prompt to contain ralph-status instruction")
 	}
 
-	if !strings.Contains(prompt, "passes: true") {
-		t.Error("Expected prompt to contain passes: true instruction")
+	// The prompt must NOT tell the agent to set passes: true (self-certification removed)
+	if strings.Contains(prompt, "passes: true") {
+		t.Error("Expected prompt to NOT contain passes: true instruction — agent must not self-certify")
+	}
+}
+
+func TestGetPrompt_NoSelfCertification(t *testing.T) {
+	prompt := GetPrompt("/path/prd.json", "/path/progress.md", `{"id":"US-001"}`, "US-001", "Test Story")
+
+	// The prompt must not tell the agent to update the PRD
+	if strings.Contains(prompt, "Update the PRD") {
+		t.Error("Expected prompt to NOT contain 'Update the PRD' — agent must not modify prd.json")
+	}
+
+	// The prompt must not contain melliza-complete stop condition
+	if strings.Contains(prompt, "melliza-complete") {
+		t.Error("Expected prompt to NOT contain melliza-complete — loop controls completion, not agent")
+	}
+
+	// The prompt must tell the agent to NOT modify prd.json
+	if !strings.Contains(prompt, "Do NOT modify prd.json") {
+		t.Error("Expected prompt to contain 'Do NOT modify prd.json' instruction")
 	}
 }
 
@@ -90,6 +110,45 @@ func TestGetPrompt_MellizaExclusion(t *testing.T) {
 	// The commit step should not say "commit ALL changes" anymore
 	if strings.Contains(prompt, "commit ALL changes") {
 		t.Error("Expected prompt to NOT say 'commit ALL changes' — it should exclude .melliza/ files")
+	}
+}
+
+func TestGetReviewPrompt(t *testing.T) {
+	diff := "diff --git a/main.go b/main.go\n+added line"
+	criteria := "- User can log in\n- Password is validated"
+	storyTitle := "User Authentication"
+
+	prompt := GetReviewPrompt(diff, criteria, storyTitle)
+
+	if prompt == "" {
+		t.Error("Expected GetReviewPrompt() to return non-empty prompt")
+	}
+
+	// Verify placeholders were substituted
+	if strings.Contains(prompt, "{{DIFF}}") {
+		t.Error("Expected {{DIFF}} to be substituted")
+	}
+	if strings.Contains(prompt, "{{ACCEPTANCE_CRITERIA}}") {
+		t.Error("Expected {{ACCEPTANCE_CRITERIA}} to be substituted")
+	}
+	if strings.Contains(prompt, "{{STORY_TITLE}}") {
+		t.Error("Expected {{STORY_TITLE}} to be substituted")
+	}
+
+	// Verify content is present
+	if !strings.Contains(prompt, diff) {
+		t.Error("Expected prompt to contain the diff")
+	}
+	if !strings.Contains(prompt, criteria) {
+		t.Error("Expected prompt to contain the acceptance criteria")
+	}
+	if !strings.Contains(prompt, storyTitle) {
+		t.Error("Expected prompt to contain the story title")
+	}
+
+	// Verify it asks for a verdict
+	if !strings.Contains(prompt, "verdict") {
+		t.Error("Expected prompt to mention 'verdict'")
 	}
 }
 

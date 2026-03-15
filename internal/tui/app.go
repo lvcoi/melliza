@@ -38,6 +38,7 @@ const (
 	StateStopped
 	StateComplete
 	StateError
+	StateSetup
 )
 
 func (s AppState) String() string {
@@ -54,6 +55,8 @@ func (s AppState) String() string {
 		return "Complete"
 	case StateError:
 		return "Error"
+	case StateSetup:
+		return "Setup"
 	default:
 		return "Unknown"
 	}
@@ -165,6 +168,7 @@ const (
 	ViewQuitConfirm
 	ViewPRDCreationChat
 	ViewErrorModal
+	ViewWizard
 )
 
 // App is the main Bubble Tea model for the Melliza TUI.
@@ -244,6 +248,9 @@ type App struct {
 
 	// PRD creation chat
 	creationChat *PRDCreationChat
+
+	// Setup wizard (first-run)
+	wizard *Wizard
 
 	// Completion notification callback
 	onCompletion func(prdName string)
@@ -371,6 +378,13 @@ func (a *App) StartWithInit(name, context string) {
 	a.viewMode = ViewPRDCreationChat
 }
 
+// StartWithWizard transitions the TUI to the setup wizard for first-run.
+func (a *App) StartWithWizard(prdName string) {
+	a.wizard = NewWizard(a.baseDir)
+	a.prdName = prdName
+	a.viewMode = ViewWizard
+}
+
 // SetCompletionCallback sets a callback that is called when any PRD completes.
 func (a *App) SetCompletionCallback(fn func(prdName string)) {
 	a.onCompletion = fn
@@ -422,6 +436,11 @@ func (a App) Init() tea.Cmd {
 		cmds = append(cmds, a.creationChat.StartSession(prompt), tickChatSpinner())
 	}
 
+	// If starting in wizard mode, kick off background scan
+	if a.viewMode == ViewWizard && a.wizard != nil {
+		cmds = append(cmds, a.wizard.StartScan())
+	}
+
 	return tea.Batch(cmds...)
 }
 
@@ -463,12 +482,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case ViewSettings:
 				a.settingsOverlay.MoveUp()
 			default:
-				if a.prd != nil && a.selectedIndex > 0 {
-					a.selectedIndex--
-					if a.selectedIndex < a.storiesScrollOffset {
-						a.storiesScrollOffset = a.selectedIndex
-					}
-				}
+				// Scroll the details viewport on mouse wheel
+				a.detailsVP.ScrollUp(3)
 			}
 		} else if msg.Button == tea.MouseWheelDown {
 			switch a.viewMode {
@@ -482,10 +497,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case ViewSettings:
 				a.settingsOverlay.MoveDown()
 			default:
-				if a.prd != nil && a.selectedIndex < len(a.prd.UserStories)-1 {
-					a.selectedIndex++
-					a.adjustStoriesScroll()
-				}
+				// Scroll the details viewport on mouse wheel
+				a.detailsVP.ScrollDown(3)
 			}
 		}
 		return a, nil
@@ -602,6 +615,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prompt := embed.GetInitPrompt(prdDir, "")
 		return a, tea.Batch(a.creationChat.StartSession(prompt), tickChatSpinner())
 
+	case WizardCompleteMsg:
+		// Wizard done — transition to PRD creation chat with context files
+		a.wizard = nil
+		a.creationChat = NewPRDCreationChat(a.baseDir, a.prdName, "")
+		a.creationChat.SetSize(a.width, a.height)
+		a.viewMode = ViewPRDCreationChat
+
+		prdDir := filepath.Join(a.baseDir, ".melliza", "prds", a.prdName)
+		_ = os.MkdirAll(prdDir, 0755)
+
+		prompt := embed.GetInitPrompt(prdDir, "")
+		return a, tea.Batch(a.creationChat.StartSession(prompt), tickChatSpinner())
+
+	case WizardScanDoneMsg, WizardActivityMsg:
+		if a.wizard != nil {
+			a.wizard, _ = a.wizard.Update(msg)
+		}
+		return a, nil
+
 	case convertDoneMsg:
 		if msg.err != nil {
 			a.lastActivity = "Conversion failed: " + msg.err.Error()
@@ -684,6 +716,17 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Handle completion screen view
 		if a.viewMode == ViewCompletion {
 			return a.handleCompletionKeys(msg)
+		}
+
+		// Handle wizard view
+		if a.viewMode == ViewWizard && a.wizard != nil {
+			switch msg.String() {
+			case "esc", "ctrl+c":
+				return a, tea.Quit
+			}
+			var wcmd tea.Cmd
+			a.wizard, wcmd = a.wizard.Update(msg)
+			return a, wcmd
 		}
 
 		// Handle PRD creation chat view
@@ -1241,6 +1284,18 @@ func (a App) handleLoopEvent(prdName string, event loop.Event) (tea.Model, tea.C
 		if isCurrentPRD {
 			a.lastActivity = event.Text
 		}
+	case loop.EventReviewStart:
+		if isCurrentPRD {
+			a.lastActivity = "Reviewing changes..."
+		}
+	case loop.EventReviewPass:
+		if isCurrentPRD {
+			a.lastActivity = "✓ Review passed"
+		}
+	case loop.EventReviewFail:
+		if isCurrentPRD {
+			a.lastActivity = "✗ Review rejected: " + event.Text
+		}
 	case loop.EventStderr:
 		// Show meaningful stderr in activity bar (errors, API issues)
 		if isCurrentPRD {
@@ -1352,6 +1407,8 @@ func (a App) View() tea.View {
 		content = a.renderErrorModalView()
 	case ViewPRDCreationChat:
 		content = a.renderCreationChatView()
+	case ViewWizard:
+		content = a.renderWizardView()
 	default:
 		content = a.renderDashboard()
 	}
@@ -1368,6 +1425,15 @@ func (a *App) renderCreationChatView() string {
 	}
 	a.creationChat.SetSize(a.width, a.height)
 	return a.creationChat.View().Content
+}
+
+// renderWizardView renders the setup wizard.
+func (a *App) renderWizardView() string {
+	if a.wizard == nil {
+		return "Initializing wizard..."
+	}
+	a.wizard.SetSize(a.width, a.height)
+	return a.wizard.View()
 }
 
 // renderBranchWarningView renders the branch warning dialog.
