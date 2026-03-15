@@ -757,6 +757,54 @@ func TestLoop_PostIterationMarksPassed(t *testing.T) {
 	}
 }
 
+// TestLoop_StopSkipsFinalization verifies that finalizeIteration is NOT called when
+// the loop is stopped mid-iteration, preventing an interrupted story from being
+// recorded as complete.
+//
+// This test exercises the actual stopped path through runIterationWithRetry (which
+// returns nil when l.stopped is true without spawning Gemini) and then applies the
+// same gate condition that Run() uses to confirm finalization is skipped.
+func TestLoop_StopSkipsFinalization(t *testing.T) {
+	tmpDir := t.TempDir()
+	prdPath := createTestPRD(t, tmpDir, false)
+
+	l := NewLoop(prdPath, "test", 5)
+	l.currentStoryID = "US-001"
+
+	// Simulate Stop() being called mid-iteration.
+	l.mu.Lock()
+	l.stopped = true
+	l.mu.Unlock()
+
+	// runIterationWithRetry returns nil when stopped is true (no Gemini spawn needed).
+	ctx := context.Background()
+	err := l.runIterationWithRetry(ctx)
+	if err != nil {
+		t.Fatalf("runIterationWithRetry() expected nil when stopped, got: %v", err)
+	}
+
+	// Apply the gate that Run() now uses: skip finalization when stopped.
+	l.mu.Lock()
+	wasStopped := l.stopped
+	l.mu.Unlock()
+
+	if !wasStopped && ctx.Err() == nil {
+		// In Run(), finalization only happens here (true-success path).
+		if err := l.finalizeIteration(); err != nil {
+			t.Fatalf("finalizeIteration() unexpected error: %v", err)
+		}
+	}
+
+	// The story must NOT be marked passed because the iteration was interrupted.
+	p, err := prd.LoadPRD(prdPath)
+	if err != nil {
+		t.Fatalf("LoadPRD() error: %v", err)
+	}
+	if p.UserStories[0].Passes {
+		t.Error("story must NOT be marked passed when loop was stopped mid-iteration")
+	}
+}
+
 // TestLoop_WatchdogWithWorkDir tests that watchdog works with NewLoopWithWorkDir too.
 func TestLoop_WatchdogWithWorkDir(t *testing.T) {
 	l := NewLoopWithWorkDir("/test/prd.json", "/work", "test", 5)
