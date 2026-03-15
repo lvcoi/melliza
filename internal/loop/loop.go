@@ -209,6 +209,16 @@ func (l *Loop) Run(ctx context.Context) error {
 			return err
 		}
 
+		// Gate finalization on a true successful iteration: skip when the loop
+		// was stopped or the context was canceled mid-iteration (both cause
+		// runIterationWithRetry to return nil without completing the story).
+		l.mu.Lock()
+		wasStopped := l.stopped
+		l.mu.Unlock()
+		if wasStopped || ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		// After a successful iteration, mark the current story as passed
 		if err := l.finalizeIteration(); err != nil {
 			l.events <- Event{
