@@ -107,6 +107,11 @@ type PRDCreationChat struct {
 	jokeIndex      int
 	lastJokeChange time.Time
 	loadingStart   time.Time
+
+	// Streaming state
+	events           chan ChatEventMsg // Channel for streaming events from Gemini
+	streamingContent string           // In-progress assistant text during streaming
+	currentActivity  string           // Current tool being used (e.g. "Read", "Write")
 }
 
 // NewPRDCreationChat creates a new PRDCreationChat component.
@@ -192,7 +197,7 @@ func (c *PRDCreationChat) StartSession(prompt string) tea.Cmd {
 	c.renderViewport()
 	c.viewport.GotoBottom()
 
-	return c.runGemini(prompt, "")
+	return c.startGeminiStream(prompt, "")
 }
 
 // SendMessage sends a user message to Gemini.
@@ -223,14 +228,38 @@ func (c *PRDCreationChat) SendMessage() tea.Cmd {
 	c.renderViewport()
 	c.viewport.GotoBottom()
 
-	return c.runGemini(content, c.sessionID)
+	return c.startGeminiStream(content, c.sessionID)
 }
 
-// runGemini executes Gemini in headless mode with stream-json output.
-// Uses -p (headless) so Gemini completes the full agent loop including tool calls.
-// Uses -e none to skip loading extensions (much faster startup).
-func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
-	return func() tea.Msg {
+// geminiStreamMsg is the JSON structure of a Gemini stream-json line.
+type geminiStreamMsg struct {
+	Type    string          `json:"type"`
+	Subtype string          `json:"subtype,omitempty"`
+	Message json.RawMessage `json:"message,omitempty"`
+}
+
+// geminiAssistantMsg represents the assistant message body.
+type geminiAssistantMsg struct {
+	Content []geminiContentBlock `json:"content"`
+}
+
+// geminiContentBlock represents a content block in an assistant message.
+type geminiContentBlock struct {
+	Type  string `json:"type"`
+	Text  string `json:"text,omitempty"`
+	Name  string `json:"name,omitempty"`
+}
+
+// startGeminiStream starts Gemini and streams events through a channel.
+// Each event is delivered as a ChatEventMsg via listenForChatEvent().
+func (c *PRDCreationChat) startGeminiStream(prompt string, sessionID string) tea.Cmd {
+	c.events = make(chan ChatEventMsg, 50)
+	c.streamingContent = ""
+	c.currentActivity = ""
+
+	go func() {
+		defer close(c.events)
+
 		args := []string{"--yolo", "--output-format", "stream-json", "-e", "none"}
 		if sessionID != "" {
 			args = append(args, "-r", sessionID, "-p", prompt)
@@ -240,23 +269,26 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 
 		cmd := exec.Command("gemini", args...)
 		cmd.Dir = c.baseDir
-		cmd.Stdin = nil // Ensure no stdin attachment
+		cmd.Stdin = nil
 
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
-			return ChatEventMsg{Type: "error", Content: err.Error()}
+			c.events <- ChatEventMsg{Type: "error", Content: err.Error()}
+			return
 		}
 
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
-			return ChatEventMsg{Type: "error", Content: err.Error()}
+			c.events <- ChatEventMsg{Type: "error", Content: err.Error()}
+			return
 		}
 
 		if err := cmd.Start(); err != nil {
-			return ChatEventMsg{Type: "error", Content: err.Error()}
+			c.events <- ChatEventMsg{Type: "error", Content: err.Error()}
+			return
 		}
 
-		// Capture stderr lines for error reporting AND log to file
+		// Capture stderr in background
 		var stderrLines []string
 		var stderrMu sync.Mutex
 		stderrDone := make(chan struct{})
@@ -268,9 +300,9 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 			if logFile != nil {
 				defer logFile.Close()
 			}
-			scanner := bufio.NewScanner(stderr)
-			for scanner.Scan() {
-				line := scanner.Text()
+			sc := bufio.NewScanner(stderr)
+			for sc.Scan() {
+				line := sc.Text()
 				if logFile != nil {
 					logFile.WriteString("[stderr] " + line + "\n")
 				}
@@ -283,77 +315,87 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 			}
 		}()
 
+		// Parse stdout using correct Gemini stream-json format
 		scanner := bufio.NewScanner(stdout)
-		var lastAssistantMsg string
-		var capturedSessionID string
-		var resultError string
-
 		for scanner.Scan() {
 			line := scanner.Text()
-			var msg map[string]interface{}
+
+			var msg geminiStreamMsg
 			if err := json.Unmarshal([]byte(line), &msg); err != nil {
 				continue
 			}
 
-			msgType, _ := msg["type"].(string)
-			switch msgType {
-			case "init":
-				sid, _ := msg["session_id"].(string)
-				capturedSessionID = sid
-			case "message":
-				role, _ := msg["role"].(string)
-				content, _ := msg["content"].(string)
-				if role == "assistant" {
-					lastAssistantMsg += content
-				}
-			case "result":
-				// Gemini emits a result event with status:"error" when API calls fail
-				status, _ := msg["status"].(string)
-				if status == "error" {
-					if errObj, ok := msg["error"].(map[string]interface{}); ok {
-						if errMsg, ok := errObj["message"].(string); ok {
-							resultError = errMsg
-						}
+			switch msg.Type {
+			case "system":
+				if msg.Subtype == "init" {
+					var initData struct {
+						SessionID string `json:"session_id"`
 					}
+					json.Unmarshal([]byte(line), &initData)
+					c.events <- ChatEventMsg{Type: "init", SessionID: initData.SessionID}
+				}
+
+			case "assistant":
+				if msg.Message == nil {
+					continue
+				}
+				var aMsg geminiAssistantMsg
+				if err := json.Unmarshal(msg.Message, &aMsg); err != nil {
+					continue
+				}
+				for _, block := range aMsg.Content {
+					switch block.Type {
+					case "text":
+						c.events <- ChatEventMsg{Type: "delta", Content: block.Text}
+					case "tool_use":
+						c.events <- ChatEventMsg{Type: "tool", Content: block.Name}
+					}
+				}
+
+			case "user":
+				// Tool result returned — clear activity indicator
+				c.events <- ChatEventMsg{Type: "tool_done"}
+
+			case "result":
+				var resultData struct {
+					Status string `json:"status"`
+					Error  struct {
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				json.Unmarshal([]byte(line), &resultData)
+				if resultData.Status == "error" && resultData.Error.Message != "" {
+					c.events <- ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini API error: %s", resultData.Error.Message)}
 				}
 			}
 		}
 
 		waitErr := cmd.Wait()
-		<-stderrDone // Ensure all stderr is captured before using it
-
-		// If we captured assistant output, return it even if Gemini exited non-zero.
-		// Gemini often exits with code 1 due to stdin closing, extension errors,
-		// or API timeouts — but may have still produced useful output and written files.
-		if lastAssistantMsg != "" {
-			return ChatEventMsg{
-				Type:      "message",
-				Content:   lastAssistantMsg,
-				SessionID: capturedSessionID,
-			}
-		}
-
-		// If Gemini reported a structured error in its result event, surface that
-		if resultError != "" {
-			return ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini API error: %s", resultError)}
-		}
+		<-stderrDone
 
 		if waitErr != nil {
-			// Fall back to stderr for error context
 			stderrMu.Lock()
 			errContext := loop.FilterStderrForError(stderrLines)
 			stderrMu.Unlock()
 			if errContext != "" {
-				return ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini failed: %s", errContext)}
+				c.events <- ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini failed: %s", errContext)}
 			}
-			return ChatEventMsg{Type: "error", Content: fmt.Sprintf("Gemini exited with error: %s", waitErr.Error())}
 		}
+	}()
 
-		return ChatEventMsg{
-			Type:      "message",
-			Content:   lastAssistantMsg,
-			SessionID: capturedSessionID,
+	return c.listenForChatEvent()
+}
+
+// listenForChatEvent returns a Bubble Tea command that reads one event from the
+// streaming channel. When the channel closes, it emits a "done" event.
+func (c *PRDCreationChat) listenForChatEvent() tea.Cmd {
+	ch := c.events
+	return func() tea.Msg {
+		event, ok := <-ch
+		if !ok {
+			return ChatEventMsg{Type: "done"}
 		}
+		return event
 	}
 }
 
@@ -364,24 +406,77 @@ func (c *PRDCreationChat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ChatEventMsg:
 		switch msg.Type {
+		case "init":
+			// Session started — capture session ID for follow-up messages
+			if msg.SessionID != "" {
+				c.sessionID = msg.SessionID
+			}
+			return c, c.listenForChatEvent()
+
+		case "delta":
+			// Streaming text chunk from Gemini
+			c.streamingContent += msg.Content
+			c.currentActivity = "" // Clear tool activity when text arrives
+			c.renderViewport()
+			c.viewport.GotoBottom()
+			return c, c.listenForChatEvent()
+
+		case "tool":
+			// Tool started — show activity
+			c.currentActivity = msg.Content
+			c.renderViewport()
+			c.viewport.GotoBottom()
+			return c, c.listenForChatEvent()
+
+		case "tool_done":
+			// Tool finished
+			c.currentActivity = ""
+			c.renderViewport()
+			return c, c.listenForChatEvent()
+
+		case "done":
+			// Gemini process finished — finalize streaming content
+			c.loading = false
+			c.currentActivity = ""
+			content := c.streamingContent
+			c.streamingContent = ""
+
+			if content != "" {
+				c.messages = append(c.messages, Message{Role: RoleAssistant, Content: content})
+
+				// Check if PRD was saved
+				if strings.Contains(content, "prd.md") || strings.Contains(content, "saved") {
+					c.prdSaved = true
+				}
+				// Check if Gemini is finished
+				if strings.Contains(content, "/exit") || strings.Contains(content, "<melliza-complete/>") {
+					c.done = true
+				}
+				// Detect structured clarifying questions
+				if !c.done && !c.showingQuestionModal {
+					if qs := ParseQuestions(content); len(qs) >= 2 {
+						c.questionModal = NewQuestionModal(qs)
+						c.questionModal.SetSize(c.width, c.height)
+						c.showingQuestionModal = true
+					}
+				}
+			}
+			c.renderViewport()
+			c.viewport.GotoBottom()
+
 		case "message":
+			// Legacy: single-shot message (backward compat)
 			c.loading = false
 			if msg.SessionID != "" {
 				c.sessionID = msg.SessionID
 			}
 			c.messages = append(c.messages, Message{Role: RoleAssistant, Content: msg.Content})
-
-			// Check if PRD was saved (heuristic: check if prd.md exists)
 			if strings.Contains(msg.Content, "prd.md") || strings.Contains(msg.Content, "saved") {
 				c.prdSaved = true
 			}
-
-			// Check if Gemini is finished
 			if strings.Contains(msg.Content, "/exit") || strings.Contains(msg.Content, "<melliza-complete/>") {
 				c.done = true
 			}
-
-			// Detect structured clarifying questions and offer the modal
 			if !c.done && !c.showingQuestionModal {
 				if qs := ParseQuestions(msg.Content); len(qs) >= 2 {
 					c.questionModal = NewQuestionModal(qs)
@@ -389,11 +484,13 @@ func (c *PRDCreationChat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					c.showingQuestionModal = true
 				}
 			}
-
 			c.renderViewport()
 			c.viewport.GotoBottom()
+
 		case "error":
 			c.loading = false
+			c.currentActivity = ""
+			c.streamingContent = ""
 			c.err = fmt.Errorf("%s", msg.Content)
 			c.messages = append(c.messages, Message{Role: RoleSystem, Content: "Error: " + msg.Content})
 			c.renderViewport()
@@ -485,27 +582,46 @@ func (c *PRDCreationChat) renderViewport() {
 		b.WriteString("\n\n")
 	}
 
+	// Show in-progress streaming content
+	if c.streamingContent != "" {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(SuccessColor).Render("Gemini: "))
+		b.WriteString("\n")
+		// Use plain text during streaming to avoid rendering issues with partial markdown
+		b.WriteString(lipgloss.NewStyle().Foreground(TextColor).Render(c.streamingContent))
+		b.WriteString("\n\n")
+	}
+
 	if c.loading {
 		elapsed := time.Since(c.loadingStart).Truncate(time.Second)
 		spinner := spinnerFrames[c.spinnerFrame]
-		robot := chatRobotFrames[c.robotFrame]
-		joke := chatWaitingJokes[c.jokeIndex]
 
-		// Spinner + status line
-		statusLine := fmt.Sprintf("%s Gemini is thinking... (%s)", spinner, elapsed)
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(PrimaryColor).Render(statusLine))
-		b.WriteString("\n\n")
+		// Show tool activity if a tool is running
+		if c.currentActivity != "" {
+			activityLine := fmt.Sprintf("%s Using %s... (%s)", spinner, c.currentActivity, elapsed)
+			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(WarningColor).Render(activityLine))
+			b.WriteString("\n")
+		} else if c.streamingContent == "" {
+			// Only show full waiting animation if no content has arrived yet
+			robot := chatRobotFrames[c.robotFrame]
+			joke := chatWaitingJokes[c.jokeIndex]
 
-		// Robot ASCII art
-		b.WriteString(lipgloss.NewStyle().Foreground(MutedColor).Render(robot))
-		b.WriteString("\n\n")
+			statusLine := fmt.Sprintf("%s Gemini is thinking... (%s)", spinner, elapsed)
+			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(PrimaryColor).Render(statusLine))
+			b.WriteString("\n\n")
 
-		// Joke in a styled box
-		jokeStyle := lipgloss.NewStyle().
-			Italic(true).
-			Foreground(WarningColor).
-			PaddingLeft(3)
-		b.WriteString(jokeStyle.Render("  " + joke))
+			b.WriteString(lipgloss.NewStyle().Foreground(MutedColor).Render(robot))
+			b.WriteString("\n\n")
+
+			jokeStyle := lipgloss.NewStyle().
+				Italic(true).
+				Foreground(WarningColor).
+				PaddingLeft(3)
+			b.WriteString(jokeStyle.Render("  " + joke))
+		} else {
+			// Content is streaming but no tool active — just show spinner
+			statusLine := fmt.Sprintf("%s Gemini is working... (%s)", spinner, elapsed)
+			b.WriteString(lipgloss.NewStyle().Foreground(MutedColor).Render(statusLine))
+		}
 	}
 
 	c.viewport.SetContent(b.String())

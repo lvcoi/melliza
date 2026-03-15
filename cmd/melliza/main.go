@@ -11,6 +11,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/lvcoi/melliza/internal/cmd"
 	"github.com/lvcoi/melliza/internal/config"
+	projectctx "github.com/lvcoi/melliza/internal/context"
 	"github.com/lvcoi/melliza/internal/git"
 	"github.com/lvcoi/melliza/internal/prd"
 	"github.com/lvcoi/melliza/internal/tui"
@@ -21,15 +22,16 @@ var Version = "dev"
 
 // TUIOptions holds the parsed command-line options for the TUI
 type TUIOptions struct {
-	PRDPath       string
-	MaxIterations int
-	Verbose       bool
-	Merge         bool
-	Force         bool
-	NoRetry       bool
-	StartWithInit bool   // Start in PRD creation chat mode
-	InitName      string // PRD name for init mode
-	InitContext   string // Optional context for init mode
+	PRDPath         string
+	MaxIterations   int
+	Verbose         bool
+	Merge           bool
+	Force           bool
+	NoRetry         bool
+	StartWithInit   bool   // Start in PRD creation chat mode
+	StartWithWizard bool   // Start in setup wizard (first-run, no context files)
+	InitName        string // PRD name for init mode
+	InitContext     string // Optional context for init mode
 }
 
 func main() {
@@ -313,16 +315,9 @@ func runDelete() {
 func runTUIWithOptions(opts *TUIOptions) {
 	prdPath := opts.PRDPath
 
-	// If starting with init, we don't need a PRD path initially
-	if opts.StartWithInit {
+	// If starting with init or wizard, create an empty PRD first
+	if opts.StartWithInit || opts.StartWithWizard {
 		cwd, _ := os.Getwd()
-		// If no PRD found, but we want init, we can't create an App easily with missing PRD
-		// Wait, NewAppWithOptions expects a valid PRD path.
-		
-		// If we're starting fresh, create a temporary/default prd.json if needed
-		// or just use a dummy path and have the TUI handle it.
-		
-		// Let's create the directory for the new PRD and an empty prd.json first
 		prdDir := filepath.Join(cwd, ".melliza", "prds", opts.InitName)
 		_ = os.MkdirAll(prdDir, 0755)
 		prdPath = filepath.Join(prdDir, "prd.json")
@@ -367,8 +362,12 @@ func runTUIWithOptions(opts *TUIOptions) {
 				fmt.Fprintf(os.Stderr, "Warning: failed to save config: %v\n", err)
 			}
 
-			// Launch TUI with init mode to create the PRD inside the TUI
-			opts.StartWithInit = true
+			// Check if context files exist — if not, run the wizard first
+			if !projectctx.HasContextFiles(cwd) {
+				opts.StartWithWizard = true
+			} else {
+				opts.StartWithInit = true
+			}
 			opts.InitName = result.PRDName
 			runTUIWithOptions(opts)
 			return
@@ -427,8 +426,10 @@ func runTUIWithOptions(opts *TUIOptions) {
 		app.DisableRetry()
 	}
 
-	// Trigger init flow if requested
-	if opts.StartWithInit {
+	// Trigger init or wizard flow if requested
+	if opts.StartWithWizard {
+		app.StartWithWizard(opts.InitName)
+	} else if opts.StartWithInit {
 		app.StartWithInit(opts.InitName, opts.InitContext)
 	}
 
