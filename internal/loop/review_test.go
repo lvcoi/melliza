@@ -75,6 +75,21 @@ func TestLoop_FinalizeWithReview_PassSetsPassesTrue(t *testing.T) {
 	if !p.UserStories[0].Passes {
 		t.Error("Expected story to be marked passed after review pass")
 	}
+
+	// Verify review lifecycle events were emitted (drain without closing)
+	var events []Event
+	for len(l.events) > 0 {
+		events = append(events, <-l.events)
+	}
+	if len(events) < 2 {
+		t.Fatalf("Expected at least 2 review events, got %d", len(events))
+	}
+	if events[0].Type != EventReviewStart {
+		t.Errorf("Expected first event EventReviewStart, got %v", events[0].Type)
+	}
+	if events[1].Type != EventReviewPass {
+		t.Errorf("Expected second event EventReviewPass, got %v", events[1].Type)
+	}
 }
 
 func TestLoop_FinalizeWithReview_FailCapturesReasons(t *testing.T) {
@@ -112,6 +127,24 @@ func TestLoop_FinalizeWithReview_FailCapturesReasons(t *testing.T) {
 	}
 	if reasons[0] != "tests are broken" {
 		t.Errorf("Expected first reason 'tests are broken', got %q", reasons[0])
+	}
+
+	// Verify review lifecycle events were emitted (drain without closing)
+	var events []Event
+	for len(l.events) > 0 {
+		events = append(events, <-l.events)
+	}
+	if len(events) < 2 {
+		t.Fatalf("Expected at least 2 review events, got %d", len(events))
+	}
+	if events[0].Type != EventReviewStart {
+		t.Errorf("Expected first event EventReviewStart, got %v", events[0].Type)
+	}
+	if events[1].Type != EventReviewFail {
+		t.Errorf("Expected second event EventReviewFail, got %v", events[1].Type)
+	}
+	if events[1].Text != "tests are broken; missing validation" {
+		t.Errorf("Expected fail text 'tests are broken; missing validation', got %q", events[1].Text)
 	}
 }
 

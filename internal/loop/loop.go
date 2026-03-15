@@ -806,6 +806,16 @@ func (l *Loop) finalizeIteration() error {
 
 	// Run review if configured
 	if reviewFn != nil {
+		l.mu.Lock()
+		iter := l.iteration
+		l.mu.Unlock()
+
+		l.events <- Event{
+			Type:      EventReviewStart,
+			Iteration: iter,
+			StoryID:   storyID,
+		}
+
 		verdict, err := reviewFn(l.prdPath, storyID)
 		if err != nil {
 			return fmt.Errorf("review failed: %w", err)
@@ -814,7 +824,20 @@ func (l *Loop) finalizeIteration() error {
 			l.mu.Lock()
 			l.lastRejectionReasons = verdict.Reasons
 			l.mu.Unlock()
+
+			l.events <- Event{
+				Type:      EventReviewFail,
+				Iteration: iter,
+				StoryID:   storyID,
+				Text:      strings.Join(verdict.Reasons, "; "),
+			}
 			return nil // Don't mark as passed
+		}
+
+		l.events <- Event{
+			Type:      EventReviewPass,
+			Iteration: iter,
+			StoryID:   storyID,
 		}
 	}
 
