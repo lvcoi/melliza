@@ -2,6 +2,7 @@ package prd
 
 import (
 	"bufio"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -165,7 +166,9 @@ func (w *ProgressWatcher) processEvents() {
 			if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
 				if filepath.Base(event.Name) == "progress.md" {
 					entries, err := ParseProgress(progressPath)
-					if err == nil && entries != nil {
+					if err != nil {
+						log.Printf("progress watcher: failed to parse %s: %v", progressPath, err)
+					} else if entries != nil {
 						w.events <- entries
 					}
 				}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -133,7 +134,7 @@ func (l *Loop) Run(ctx context.Context) error {
 	prdDir := filepath.Dir(l.prdPath)
 	logPath := filepath.Join(prdDir, "gemini.log")
 	var err error
-	l.logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	l.logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -364,10 +365,10 @@ func (l *Loop) runIteration(ctx context.Context) error {
 	go func() {
 		defer close(stderrDone)
 		scanner := bufio.NewScanner(stderr)
-		scanner.Buffer(make([]byte, 256*1024), 256*1024)
+		scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
-			l.logLine("[stderr] " + line)
+			l.logLine("[stderr] " + redactSecrets(line))
 			// Emit stderr as events so TUI can show them
 			l.mu.Lock()
 			iter := l.iteration
@@ -385,7 +386,7 @@ func (l *Loop) runIteration(ctx context.Context) error {
 
 	// Parse stdout stream-json lines in real-time
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -579,6 +580,25 @@ func (l *Loop) logStream(r io.Reader, prefix string) {
 }
 
 // logLine writes a line to the log file.
+// redactSecrets masks sensitive patterns (API keys, tokens) in a string.
+var sensitiveEnvVarRe = regexp.MustCompile(`(GEMINI_API_KEY|GOOGLE_API_KEY|API_KEY|SECRET_KEY|ACCESS_TOKEN)=\S+`)
+var sensitiveTokenRe = regexp.MustCompile(`(sk-|ghp_|AIza)\S+`)
+
+func redactSecrets(s string) string {
+	s = sensitiveEnvVarRe.ReplaceAllStringFunc(s, func(m string) string {
+		i := strings.Index(m, "=")
+		return m[:i+1] + "***REDACTED***"
+	})
+	s = sensitiveTokenRe.ReplaceAllStringFunc(s, func(m string) string {
+		if strings.HasPrefix(m, "AIza") {
+			return "AIza***REDACTED***"
+		}
+		prefix := m[:4]
+		return prefix + "***REDACTED***"
+	})
+	return s
+}
+
 func (l *Loop) logLine(line string) {
 	if l.logFile != nil {
 		l.logFile.WriteString(line + "\n")

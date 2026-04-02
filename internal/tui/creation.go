@@ -256,7 +256,7 @@ func (c *PRDCreationChat) runGemini(prompt string, sessionID string) tea.Cmd {
 			defer close(stderrDone)
 			prdDir := filepath.Join(c.baseDir, ".melliza", "prds", c.prdName)
 			logPath := filepath.Join(prdDir, "gemini.log")
-			logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			logFile, _ := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 			if logFile != nil {
 				defer logFile.Close()
 			}

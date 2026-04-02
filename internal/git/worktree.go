@@ -228,7 +228,9 @@ func MergeBranch(repoDir, branch string) ([]string, error) {
 			// Abort the merge to leave a clean state
 			abortCmd := exec.Command("git", "merge", "--abort")
 			abortCmd.Dir = repoDir
-			_ = abortCmd.Run()
+			if abortErr := abortCmd.Run(); abortErr != nil {
+				return conflicts, fmt.Errorf("merge conflict: %s (additionally, merge --abort failed: %w)", strings.TrimSpace(string(out)), abortErr)
+			}
 			return conflicts, fmt.Errorf("merge conflict: %s", strings.TrimSpace(string(out)))
 		}
 		return nil, fmt.Errorf("merge failed: %s", strings.TrimSpace(string(out)))

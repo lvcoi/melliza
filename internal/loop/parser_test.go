@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -55,8 +56,16 @@ func TestParseLineInvalidJSON(t *testing.T) {
 	}
 
 	for _, line := range tests {
-		if got := ParseLine(line); got != nil {
-			t.Errorf("ParseLine(%q) = %v, want nil", line, got)
+		got := ParseLine(line)
+		if got == nil {
+			t.Errorf("ParseLine(%q) = nil, want EventStderr event", line)
+			continue
+		}
+		if got.Type != EventStderr {
+			t.Errorf("ParseLine(%q).Type = %v, want EventStderr", line, got.Type)
+		}
+		if !strings.Contains(got.Text, "failed to parse stream JSON") {
+			t.Errorf("ParseLine(%q).Text = %q, want it to contain 'failed to parse stream JSON'", line, got.Text)
 		}
 	}
 }

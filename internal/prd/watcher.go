@@ -2,6 +2,7 @@ package prd
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
@@ -112,7 +113,9 @@ func (w *Watcher) processEvents() {
 			if event.Op&fsnotify.Remove != 0 {
 				w.events <- WatcherEvent{Error: errors.New("prd.json was removed")}
 				// Try to re-add the watch (file might be re-created)
-				_ = w.watcher.Add(w.path)
+				if addErr := w.watcher.Add(w.path); addErr != nil {
+					w.events <- WatcherEvent{Error: fmt.Errorf("failed to re-watch %s after removal: %w", w.path, addErr)}
+				}
 			}
 
 		case err, ok := <-w.watcher.Errors:

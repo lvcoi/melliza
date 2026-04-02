@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/lvcoi/melliza/internal/prd"
 	"github.com/lvcoi/melliza/internal/tui"
 )
+
+var validPRDName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // Version is set at build time via ldflags
 var Version = "dev"
@@ -210,9 +213,22 @@ func parseTUIFlags() *TUIOptions {
 		default:
 			// Positional argument: PRD name or path
 			if strings.HasSuffix(arg, ".json") || strings.HasSuffix(arg, "/") {
-				opts.PRDPath = arg
+				cleaned := filepath.Clean(arg)
+				// Validate that direct paths don't escape .melliza/prds/
+				if !strings.HasPrefix(cleaned, ".melliza/prds/") && !strings.HasPrefix(cleaned, ".melliza"+string(filepath.Separator)+"prds"+string(filepath.Separator)) {
+					// Allow absolute-looking paths or paths outside .melliza/prds/ only if they don't contain traversal
+					if strings.Contains(cleaned, "..") {
+						fmt.Fprintf(os.Stderr, "Error: invalid PRD path: %s\n", arg)
+						os.Exit(1)
+					}
+				}
+				opts.PRDPath = cleaned
 			} else {
-				// Treat as PRD name
+				// Treat as PRD name - validate it
+				if !validPRDName.MatchString(arg) {
+					fmt.Fprintf(os.Stderr, "Error: invalid PRD name %q: must contain only letters, numbers, hyphens, and underscores\n", arg)
+					os.Exit(1)
+				}
 				opts.PRDPath = fmt.Sprintf(".melliza/prds/%s/prd.json", arg)
 			}
 		}
@@ -324,11 +340,17 @@ func runTUIWithOptions(opts *TUIOptions) {
 		
 		// Let's create the directory for the new PRD and an empty prd.json first
 		prdDir := filepath.Join(cwd, ".melliza", "prds", opts.InitName)
-		_ = os.MkdirAll(prdDir, 0755)
+		if err := os.MkdirAll(prdDir, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to create PRD directory: %v\n", err)
+			os.Exit(1)
+		}
 		prdPath = filepath.Join(prdDir, "prd.json")
 		if _, err := os.Stat(prdPath); os.IsNotExist(err) {
 			emptyPRD := `{"project": "` + opts.InitName + `", "userStories": []}`
-			_ = os.WriteFile(prdPath, []byte(emptyPRD), 0644)
+			if err := os.WriteFile(prdPath, []byte(emptyPRD), 0600); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: failed to write PRD file: %v\n", err)
+				os.Exit(1)
+			}
 		}
 	}
 

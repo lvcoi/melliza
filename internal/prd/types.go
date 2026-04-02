@@ -39,6 +39,16 @@ func (p *PRD) ExtractIDPrefix() string {
 	return "US"
 }
 
+// Validate checks for impossible states and corrects them.
+// If a story has both Passes and InProgress set to true, InProgress is cleared.
+func (p *PRD) Validate() {
+	for i := range p.UserStories {
+		if p.UserStories[i].Passes && p.UserStories[i].InProgress {
+			p.UserStories[i].InProgress = false
+		}
+	}
+}
+
 // AllComplete returns true when all stories have passes: true.
 func (p *PRD) AllComplete() bool {
 	if len(p.UserStories) == 0 {

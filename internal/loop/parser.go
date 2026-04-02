@@ -130,7 +130,10 @@ func ParseLine(line string) *Event {
 
 	var msg streamMessage
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		return nil
+		return &Event{
+			Type: EventStderr,
+			Text: fmt.Sprintf("failed to parse stream JSON: %v", err),
+		}
 	}
 
 	switch msg.Type {
